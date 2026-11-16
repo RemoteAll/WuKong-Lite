@@ -52,6 +52,9 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
   列出 images/configurations，并按 `hash-N` 重算 crc32/md5/sha1/sha256（等价 bootm 的完整性检查）。
 - **镜像加密**：`wk image crypt` 提供 AES-128-CBC 加/解密（`--pad none|zero|pkcs7`），
   与参考 `openssl enc -aes-128-cbc -nopad` 逐字节一致。
+- **FAT 镜像构建**：`wk image fat` 生成 FAT12/FAT16 数据分区镜像（LFN 长文件名、
+  8.3 短名去重、卷标、`FAT 时间戳`），并在 0x80 写入 AIC 扩展信息块 `AICF`
+  （image_size/used_size + 校验和，对应 `makefatfs.py` 的离线烧写信息）。
 - **ELF 工具**：`wk image elf2aic`（按 PT_LOAD 展开为 AIC 可启动镜像）、
   `wk image elf2its`（按参考 `elf2image` 规则提取 `segN.bin` 并生成 ITS，XIP 段序交换）。
 
@@ -61,7 +64,8 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
 - ITS 中的 `signature*` / `cipher` 节点（解析到即报错，不做签名/加密）；
 - 真实 SoC 的寄存器级 HAL、启动汇编、链接脚本与交叉编译到 RISC-V；
 - RT-Thread/FreeRTOS/uCOS 内核本体、LVGL、lwIP、mbedTLS 等第三方包；
-- 文件系统镜像工具（makefatfs / mklittlefs / mkuffs）。
+- FAT32 与 `img2simg` 稀疏化、`makefatfs.py` 的 `--auto/--fullpart` 自动尺寸；
+- `mklittlefs` / `mkuffs` 文件系统镜像工具。
 
 遇到未实现的配置（如 `sign` / `encrypt`）会明确报错，不会静默生成坏镜像。
 
@@ -91,6 +95,7 @@ zig-out\bin\wk.exe image itb --kernel kernel.bin --fdt board.dtb --load 0x410000
 zig-out\bin\wk.exe image itb --its app_os.its -o os.itb
 zig-out\bin\wk.exe image crypt --input kernel.bin --key 000102030405060708090a0b0c0d0e0f --iv 101112131415161718191a1b1c1d1e1f --pad zero
 zig-out\bin\wk.exe image fitinfo --input os.itb --verify
+zig-out\bin\wk.exe image fat --input-dir rootfs --output data.img --size 8M --cluster 4 --label WKROOT
 zig-out\bin\wk.exe image env --config wk/target/d13x/demo88-nor/pack/image_cfg.json -o env.bin
 zig-out\bin\wk.exe run hello
 zig-out\bin\wk.exe shell
@@ -124,6 +129,8 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
   手工补零后的 openssl 输出一致。
 - `wk image fitinfo --verify` 对参考 `mkimage -f` 生成的带 hash FIT：**checked=4 failed=0**；
   改动 `data` 中一个字节后 **failed=2 且退出码 1**。
+- `wk image fat` 生成的镜像用参考 `mcopy.exe` 递归拷回：**文件名（含 LFN）、目录结构、
+  空目录、文件 SHA256 与源目录完全一致**（FAT12、512B 扇区、2 KiB 簇、卷标 WKROOT）。
 - 小样本回归向量（`a=b`、`-r -s 64`）已写入单元测试：`6D9AECC2 01 61 3D 62 00 00 FF...`。
 
 ## 测试覆盖
@@ -144,11 +151,12 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
 - FDT/FIT 生成（头/属性/数据/配置）、ELF32 段解析与 AIC 镜像、ELF→ITS 段提取；
 - FDT/FIT **读取**（写-读往返、坏 magic/截断报错）与 `hash-N` 校验、篡改检测；
 - ITS 解析（C 风格注释、`<0x..>` 单元表达式、`&label` 引用、重复标签、错误位置）与 hash 节点回填；
-- AES-128-CBC 加/解密往返、长度对齐错误、`zero`/`pkcs7` 补位。
+- AES-128-CBC 加/解密往返、长度对齐错误、`zero`/`pkcs7` 补位；
+- FAT12/FAT16 选择、卷标/短名/LFN 目录项、`AICF` 信息块与校验和。
 
 ## 继续开发建议
 
 1. RSA/SM2 签名（`signature`/`cipher` 节点目前显式报错）与 AIC 头 `sign_algo/encrypt_algo` 区间联动；
 2. 增加 `src/bsp/artinchip/hal/*` 的寄存器模型与 `sys/d33x` 启动流程；
 3. 把 `build.zig` 接入 `.config`（按开关选择模块编译，等价 `SConscript` 的 `GetDepend`）；
-4. 增加 `makefatfs` / `mklittlefs` 的 Zig 版本与文件系统镜像回读校验。
+4. 补 FAT32 与 `img2simg` 稀疏化，以及 `mklittlefs` / `mkuffs` 镜像工具。

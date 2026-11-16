@@ -57,6 +57,7 @@
 | `its.zig` | `mkimage -f`（`image-host/libfdt`） | `.its` 源码解析（C 风格注释/`<expr>`/节点引用），hash 节点自动填充，timestamp 置根首 |
 | `elf2aic.zig` | `elf2image` + AIC 头 | ELF32/64 段解析、AIC 展开、ITS 段提取 |
 | `crypt.zig` | `firmware_security_encrypt`（AES 部分） | AES-128-CBC 加/解密、hex 密钥解析、none/zero/pkcs7 补位 |
+| `fat.zig` | `makefatfs.py`（mformat + mcopy + AICF） | FAT12/16 镜像、LFN/8.3 目录项、卷标、`AICF` 信息块 |
 
 ## 6. 应用与 shell
 
@@ -110,6 +111,16 @@ entry(20B)×101: pageaddr1 + pageaddr2 + checksum2 + reserved + checksum1
 校验和写在偏移 36（首个 entry 的 checksum1），整页 sum+1==0
 ```
 
+### FAT 镜像与 AICF 信息块
+
+```
+引导扇区 0x00: EB 3C 90 + OEM + BPB（512B 扇区 / 2 FAT / 512 根目录项）
+          0x1FE: 55 AA
+         0x080: "AICF" + cksum ~sum32 + length(32) + version(0x0101)
+                + image_size(u64) + used_size(u64) + dirent_sect_id + dirent_data_len
+FAT12 项：entry0 = 0xFF8、entry1 = 0xFFF；FAT16：0xFFF8 / 0xFFFF
+```
+
 ## 8. 常见任务
 
 - **加一个新的板级方案**：复制 `wk/target/configs/*_defconfig` 改 `PRJ_*`，在对应 `Kconfig.board` 增加开关，执行 `wk defconfig`。
@@ -122,5 +133,7 @@ entry(20B)×101: pageaddr1 + pageaddr2 + checksum2 + reserved + checksum1
   与 bootm 的 hash 校验；校验失败退出码 1）。
 - **镜像加密**：`wk image crypt --input app.bin --key <32hex> --iv <32hex> [--pad zero]`，
   与 `openssl enc -aes-128-cbc -nopad` 逐字节一致；解密加 `--decrypt`。
+- **FAT 数据分区**：`wk image fat --input-dir rootfs --output data.img --size 8M
+  [--sector 512] [--cluster 4] [--label WKROOT]`；可用参考 `mcopy.exe -i data.img -s ::/ dir` 回读校验。
 - **未实现（明确边界）**：RSA/SM2 签名、AIC 头 `sign_algo/encrypt_algo` 与 iv/sign 区的联动布局、
   makefatfs/mklittlefs 文件系统镜像。

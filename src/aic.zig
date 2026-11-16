@@ -24,6 +24,7 @@ pub const its = @import("tools/its.zig");
 pub const elf2aic = @import("tools/elf2aic.zig");
 pub const crypt = @import("tools/crypt.zig");
 pub const fdt_reader = @import("tools/fdt_reader.zig");
+pub const fat = @import("tools/fat.zig");
 pub const partition_table = @import("tools/partition_table.zig");
 pub const pack = @import("tools/pack.zig");
 

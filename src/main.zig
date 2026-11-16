@@ -18,6 +18,7 @@ const its = aic.its;
 const elf2aic = aic.elf2aic;
 const crypt = aic.crypt;
 const fdt_reader = aic.fdt_reader;
+const fat = aic.fat;
 const fw_image = aic.fw_image;
 const image = aic.image;
 const env_image = aic.env_image;
@@ -130,6 +131,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image pagetable --input <spl.bin> [--page 2] [--block 128] [--planes 1] [-o page.bin]
         \\  image crypt --input <bin> --key <32hex> --iv <32hex> [--decrypt] [--pad zero|pkcs7] [-o out.bin]
         \\  image fitinfo --input <itb> [--dump] [--verify]
+        \\  image fat --input-dir <dir> --output <img> --size <bytes> [--sector 512] [--cluster 8] [--label NAME]
         \\  image dump <file>
         \\
         \\  shell [-c "cmd"]            交互式 msh（uart0 / gpio0 模拟设备）
@@ -835,6 +837,42 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         if (hasFlag(rest, "--dump")) {
             try fdt_reader.dump(out, tree.root, 0);
         }
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "fat")) {
+        const input_dir = getOpt(rest, "--input-dir") orelse return error.MissingArgument;
+        const output = getOpt(rest, "--output") orelse getOpt(rest, "-o") orelse return error.MissingArgument;
+        const size_text = getOpt(rest, "--size") orelse return error.MissingArgument;
+        const total_bytes = aic.utils.sizeStrToInt(size_text) catch return error.InvalidArgument;
+        const sector: u16 = if (getOpt(rest, "--sector")) |v| @intCast(std.fmt.parseInt(usize, v, 0) catch return error.InvalidArgument) else 512;
+        const cluster: u8 = if (getOpt(rest, "--cluster")) |v| @intCast(std.fmt.parseInt(usize, v, 0) catch return error.InvalidArgument) else 8;
+
+        var builder = try fat.Builder.init(aa, .{
+            .total_bytes = total_bytes,
+            .sector_size = sector,
+            .cluster_sectors = cluster,
+            .volume_label = getOpt(rest, "--label") orelse "NO NAME",
+            .mtime = if (getOpt(rest, "--mtime")) |v| @intCast(std.fmt.parseInt(u32, v, 0) catch return error.InvalidArgument) else 0,
+        });
+        defer builder.deinit();
+
+        builder.addTreeFromDir(io, input_dir) catch |err| {
+            try out.print("读取目录失败（{s}）：{s}\n", .{ input_dir, @errorName(err) });
+            return;
+        };
+        const img = try builder.build();
+        defer aa.free(img);
+
+        try ensureParentDir(io, output);
+        try writeBytes(io, output, img);
+        try out.print("FAT: {s} ({d} bytes, sector={d}, cluster={d} sectors, label={s})\n", .{
+            output,
+            img.len,
+            sector,
+            cluster,
+            builder.opts.volume_label,
+        });
         return;
     }
 
