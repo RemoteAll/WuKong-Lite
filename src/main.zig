@@ -17,6 +17,7 @@ const itb = aic.itb;
 const its = aic.its;
 const elf2aic = aic.elf2aic;
 const crypt = aic.crypt;
+const fdt_reader = aic.fdt_reader;
 const fw_image = aic.fw_image;
 const image = aic.image;
 const env_image = aic.env_image;
@@ -128,6 +129,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\            或 --its <xxx.its> [--timestamp <u32>] [-o out.itb]
         \\  image pagetable --input <spl.bin> [--page 2] [--block 128] [--planes 1] [-o page.bin]
         \\  image crypt --input <bin> --key <32hex> --iv <32hex> [--decrypt] [--pad zero|pkcs7] [-o out.bin]
+        \\  image fitinfo --input <itb> [--dump] [--verify]
         \\  image dump <file>
         \\
         \\  shell [-c "cmd"]            交互式 msh（uart0 / gpio0 模拟设备）
@@ -777,6 +779,62 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
             data.len,
             result.len,
         });
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "fitinfo")) {
+        const input = getOpt(rest, "--input") orelse return error.MissingArgument;
+        const blob = try readBytes(io, aa, input);
+        defer aa.free(blob);
+
+        var tree = fdt_reader.parse(aa, blob) catch |err| {
+            try out.print("FIT 解析失败（{s}）：{s}\n", .{ input, @errorName(err) });
+            return;
+        };
+        defer tree.deinit();
+
+        try out.print("FIT: {s}\n", .{input});
+        try out.print("  totalsize={d} version={d} struct@{d}/{d} strings@{d}/{d}\n", .{
+            tree.header.totalsize,
+            tree.header.version,
+            tree.header.off_dt_struct,
+            tree.header.size_dt_struct,
+            tree.header.off_dt_strings,
+            tree.header.size_dt_strings,
+        });
+        if (fdt_reader.getBe32(tree.root, "timestamp")) |ts| {
+            try out.print("  timestamp=0x{x} ({d})\n", .{ ts, ts });
+        }
+        if (fdt_reader.getString(tree.root, "description")) |d| {
+            try out.print("  description={s}\n", .{d});
+        }
+
+        if (fdt_reader.findChild(tree.root, "images")) |images| {
+            try out.print("  images: {d}\n", .{images.children.items.len});
+            for (images.children.items) |img| {
+                const data_len: usize = if (fdt_reader.findProp(img, "data")) |d| d.len else 0;
+                try out.print("    {s}: data={d} bytes, type={s}\n", .{
+                    img.name,
+                    data_len,
+                    fdt_reader.getString(img, "type") orelse "-",
+                });
+            }
+        }
+        if (fdt_reader.findChild(tree.root, "configurations")) |configs| {
+            try out.print("  configurations: {d} (default={s})\n", .{
+                configs.children.items.len,
+                fdt_reader.getString(configs, "default") orelse "-",
+            });
+        }
+
+        if (hasFlag(rest, "--verify")) {
+            const r = fdt_reader.verifyHashes(&tree);
+            try out.print("  校验: checked={d} failed={d} skipped_external={d}\n", .{ r.checked, r.failed, r.skipped_external });
+            if (r.failed != 0) return error.HashMismatch;
+        }
+        if (hasFlag(rest, "--dump")) {
+            try fdt_reader.dump(out, tree.root, 0);
+        }
         return;
     }
 

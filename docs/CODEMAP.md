@@ -52,6 +52,7 @@
 | `codegen.zig` | `chk_prj_config` 的 C 头生成 | `.config` / Kconfig → `src/generated/config.zig` |
 | `modules.zig` | `SConscript` + `GetDepend` | 模块启用评估、`build_plan.json` |
 | `fdt.zig` | `mkimage -f`（FDT 部分） | DEVICE TREE blob 写入器 |
+| `fdt_reader.zig` | `fdt_dump.py` + U-Boot `bootm` | FDT/FIT 读取、节点/属性访问、`hash-N` 重算校验 |
 | `itb.zig` | `mk_image.py::itb` | FIT/ITB（images/configurations/timestamp） |
 | `its.zig` | `mkimage -f`（`image-host/libfdt`） | `.its` 源码解析（C 风格注释/`<expr>`/节点引用），hash 节点自动填充，timestamp 置根首 |
 | `elf2aic.zig` | `elf2image` + AIC 头 | ELF32/64 段解析、AIC 展开、ITS 段提取 |
@@ -117,6 +118,8 @@ entry(20B)×101: pageaddr1 + pageaddr2 + checksum2 + reserved + checksum1
 - **ELF 固件**：`wk image elf2its --input app.elf -o app_os.its` 生成 ITS + `segN.bin`（可直接交给 `mkimage -f`）。
 - **FIT 镜像**：`wk image itb --kernel ... --fdt ... -o os.itb`（无需 mkimage）。
 - **ITS 直出 FIT**：`wk image itb --its os.its -o os.itb`（解析 `.its`，自动算 `hash-1` 并补 `timestamp`）。
+- **FIT 信息/校验**：`wk image fitinfo --input os.itb [--verify] [--dump]`（等价 `mkimage -l`
+  与 bootm 的 hash 校验；校验失败退出码 1）。
 - **镜像加密**：`wk image crypt --input app.bin --key <32hex> --iv <32hex> [--pad zero]`，
   与 `openssl enc -aes-128-cbc -nopad` 逐字节一致；解密加 `--decrypt`。
 - **未实现（明确边界）**：RSA/SM2 签名、AIC 头 `sign_algo/encrypt_algo` 与 iv/sign 区的联动布局、

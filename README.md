@@ -48,6 +48,8 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
   生成 `wk/config/build_plan.json` 与 `src/generated/config.zig`；shell 按生成的常量裁剪设备注册。
 - **FIT / ITB 打包**：`wk image itb` 直接生成标准 FIT（FDT 写入器 + images/configurations/timestamp），
   结构与参考 `mkimage -f` 生成物一致；`--its <file.its>` 走自写 ITS 解析器直出 FIT。
+- **FIT 读取与校验**：`wk image fitinfo --input x.itb [--verify] [--dump]` 解析 FDT、
+  列出 images/configurations，并按 `hash-N` 重算 crc32/md5/sha1/sha256（等价 bootm 的完整性检查）。
 - **镜像加密**：`wk image crypt` 提供 AES-128-CBC 加/解密（`--pad none|zero|pkcs7`），
   与参考 `openssl enc -aes-128-cbc -nopad` 逐字节一致。
 - **ELF 工具**：`wk image elf2aic`（按 PT_LOAD 展开为 AIC 可启动镜像）、
@@ -88,6 +90,7 @@ zig-out\bin\wk.exe image elf2its --input app.elf -o app_os.its
 zig-out\bin\wk.exe image itb --kernel kernel.bin --fdt board.dtb --load 0x41000000 --entry 0x41000000 -o os.itb
 zig-out\bin\wk.exe image itb --its app_os.its -o os.itb
 zig-out\bin\wk.exe image crypt --input kernel.bin --key 000102030405060708090a0b0c0d0e0f --iv 101112131415161718191a1b1c1d1e1f --pad zero
+zig-out\bin\wk.exe image fitinfo --input os.itb --verify
 zig-out\bin\wk.exe image env --config wk/target/d13x/demo88-nor/pack/image_cfg.json -o env.bin
 zig-out\bin\wk.exe run hello
 zig-out\bin\wk.exe shell
@@ -119,6 +122,8 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
 - `wk image crypt` 与参考 `tools/scripts/openssl.exe enc -aes-128-cbc -nopad -K … -iv …`
   的**加密与解密双向均逐字节一致**（另含 NIST SP 800-38A 向量单测）；`--pad zero` 与
   手工补零后的 openssl 输出一致。
+- `wk image fitinfo --verify` 对参考 `mkimage -f` 生成的带 hash FIT：**checked=4 failed=0**；
+  改动 `data` 中一个字节后 **failed=2 且退出码 1**。
 - 小样本回归向量（`a=b`、`-r -s 64`）已写入单元测试：`6D9AECC2 01 61 3D 62 00 00 FF...`。
 
 ## 测试覆盖
@@ -137,6 +142,7 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
 - 设备框架注册/打开/读写/关闭、GPIO 电平、统计分配器；
 - 配置代码生成（Kconfig / `.config` → Zig 常量）、模块启用评估（含缺失符号诊断）；
 - FDT/FIT 生成（头/属性/数据/配置）、ELF32 段解析与 AIC 镜像、ELF→ITS 段提取；
+- FDT/FIT **读取**（写-读往返、坏 magic/截断报错）与 `hash-N` 校验、篡改检测；
 - ITS 解析（C 风格注释、`<0x..>` 单元表达式、`&label` 引用、重复标签、错误位置）与 hash 节点回填；
 - AES-128-CBC 加/解密往返、长度对齐错误、`zero`/`pkcs7` 补位。
 
