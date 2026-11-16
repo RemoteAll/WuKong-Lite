@@ -19,6 +19,7 @@ const elf2aic = aic.elf2aic;
 const crypt = aic.crypt;
 const fdt_reader = aic.fdt_reader;
 const fat = aic.fat;
+const rsa = aic.rsa;
 const fw_image = aic.fw_image;
 const image = aic.image;
 const env_image = aic.env_image;
@@ -132,6 +133,8 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image crypt --input <bin> --key <32hex> --iv <32hex> [--decrypt] [--pad zero|pkcs7] [-o out.bin]
         \\  image fitinfo --input <itb> [--dump] [--verify]
         \\  image fat --input-dir <dir> --output <img> --size <bytes> [--sector 512] [--cluster 8] [--label NAME]
+        \\  image rsasign --input <file> --key <priv.pem> [-o sig.bin]
+        \\  image rsaverify --input <file> --key <pub.pem> --sig <sig.bin>
         \\  image dump <file>
         \\
         \\  shell [-c "cmd"]            交互式 msh（uart0 / gpio0 模拟设备）
@@ -873,6 +876,60 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
             cluster,
             builder.opts.volume_label,
         });
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "rsasign")) {
+        const input = getOpt(rest, "--input") orelse return error.MissingArgument;
+        const key_path = getOpt(rest, "--key") orelse return error.MissingArgument;
+        const data = try readBytes(io, aa, input);
+        defer aa.free(data);
+        const pem = try readBytes(io, aa, key_path);
+        defer aa.free(pem);
+
+        var key = rsa.parsePrivatePem(aa, pem) catch |err| {
+            try out.print("私钥解析失败（{s}）：{s}\n", .{ key_path, @errorName(err) });
+            return;
+        };
+        defer key.deinit(aa);
+
+        const sig = try rsa.signSha256(aa, &key, data);
+        defer aa.free(sig);
+
+        const out_path = getOpt(rest, "-o") orelse getOpt(rest, "--output") orelse blk: {
+            break :blk try std.fs.path.join(aa, &.{ IMAGE_DIR, try std.fmt.allocPrint(aa, "{s}.sig", .{std.fs.path.basename(input)}) });
+        };
+        try ensureParentDir(io, out_path);
+        try writeBytes(io, out_path, sig);
+        try out.print("RSA PKCS#1 v1.5 SHA-256: {s}（{d} bytes，key {d} bits）-> {s}\n", .{
+            input,
+            sig.len,
+            key.bits(),
+            out_path,
+        });
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "rsaverify")) {
+        const input = getOpt(rest, "--input") orelse return error.MissingArgument;
+        const key_path = getOpt(rest, "--key") orelse return error.MissingArgument;
+        const sig_path = getOpt(rest, "--sig") orelse return error.MissingArgument;
+        const data = try readBytes(io, aa, input);
+        defer aa.free(data);
+        const pem = try readBytes(io, aa, key_path);
+        defer aa.free(pem);
+        const sig = try readBytes(io, aa, sig_path);
+        defer aa.free(sig);
+
+        var key = rsa.parsePublicPem(aa, pem) catch |err| {
+            try out.print("公钥解析失败（{s}）：{s}\n", .{ key_path, @errorName(err) });
+            return error.SignatureMismatch;
+        };
+        defer key.deinit(aa);
+
+        const ok = try rsa.verifySha256(aa, &key, data, sig);
+        try out.print("验签 {s}: {s}\n", .{ if (ok) "成功" else "失败", input });
+        if (!ok) return error.SignatureMismatch;
         return;
     }
 

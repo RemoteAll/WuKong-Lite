@@ -58,6 +58,7 @@
 | `elf2aic.zig` | `elf2image` + AIC 头 | ELF32/64 段解析、AIC 展开、ITS 段提取 |
 | `crypt.zig` | `firmware_security_encrypt`（AES 部分） | AES-128-CBC 加/解密、hex 密钥解析、none/zero/pkcs7 补位 |
 | `fat.zig` | `makefatfs.py`（mformat + mcopy + AICF） | FAT12/16 镜像、LFN/8.3 目录项、卷标、`AICF` 信息块 |
+| `rsa.zig` | `mk_image.py` 的 PKCS1_v1_5 + U-Boot bootm | PEM/DER 解析、PKCS#1 v1.5 SHA-256 签名/验签 |
 
 ## 6. 应用与 shell
 
@@ -135,5 +136,8 @@ FAT12 项：entry0 = 0xFF8、entry1 = 0xFFF；FAT16：0xFFF8 / 0xFFFF
   与 `openssl enc -aes-128-cbc -nopad` 逐字节一致；解密加 `--decrypt`。
 - **FAT 数据分区**：`wk image fat --input-dir rootfs --output data.img --size 8M
   [--sector 512] [--cluster 4] [--label WKROOT]`；可用参考 `mcopy.exe -i data.img -s ::/ dir` 回读校验。
+- **RSA 签名**：`wk image rsasign --input os.bin --key rsa2048.pem [-o os.sig]`，
+  `wk image rsaverify --input os.bin --key rsa2048_pub.pem --sig os.sig`；与
+  `openssl dgst -sha256 -sign/-verify` 逐字节互通。
 - **未实现（明确边界）**：RSA/SM2 签名、AIC 头 `sign_algo/encrypt_algo` 与 iv/sign 区的联动布局、
   makefatfs/mklittlefs 文件系统镜像。

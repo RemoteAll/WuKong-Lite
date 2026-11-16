@@ -73,6 +73,7 @@ pub const all = [_]Module{
             "src/tools/crypt.zig",
             "src/tools/fdt_reader.zig",
             "src/tools/fat.zig",
+            "src/tools/rsa.zig",
         },
     },
     .{
