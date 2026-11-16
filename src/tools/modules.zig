@@ -68,7 +68,9 @@ pub const all = [_]Module{
             "src/tools/pack.zig",
             "src/tools/fdt.zig",
             "src/tools/itb.zig",
+            "src/tools/its.zig",
             "src/tools/elf2aic.zig",
+            "src/tools/crypt.zig",
         },
     },
     .{

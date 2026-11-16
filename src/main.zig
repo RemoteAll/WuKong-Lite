@@ -14,7 +14,9 @@ const image_cfg = aic.image_cfg;
 const partition_table = aic.partition_table;
 const pack = aic.pack;
 const itb = aic.itb;
+const its = aic.its;
 const elf2aic = aic.elf2aic;
+const crypt = aic.crypt;
 const fw_image = aic.fw_image;
 const image = aic.image;
 const env_image = aic.env_image;
@@ -123,7 +125,9 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image elf2its --input <elf> [--version 1.0.0] [--hash crc32,md5|--no-hash] [-o out_os.its]
         \\  image pack --config <json> [--datadir <dir>] [-o out.img]
         \\  image itb --kernel <bin> [--fdt <dtb>] [--ramdisk <bin>] [--load 0x...] [--entry 0x...] [-o out.itb]
+        \\            或 --its <xxx.its> [--timestamp <u32>] [-o out.itb]
         \\  image pagetable --input <spl.bin> [--page 2] [--block 128] [--planes 1] [-o page.bin]
+        \\  image crypt --input <bin> --key <32hex> --iv <32hex> [--decrypt] [--pad zero|pkcs7] [-o out.bin]
         \\  image dump <file>
         \\
         \\  shell [-c "cmd"]            交互式 msh（uart0 / gpio0 模拟设备）
@@ -670,6 +674,27 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
     }
 
     if (std.mem.eql(u8, sub, "itb")) {
+        if (getOpt(rest, "--its")) |its_path| {
+            var parsed = try its.parse(aa, io, its_path);
+            defer parsed.deinit();
+
+            const timestamp = parseOptionalU32(rest, "--timestamp") orelse currentTimestamp(io);
+            const blob = try parsed.buildFdt(aa, timestamp);
+            defer aa.free(blob);
+
+            const out_path = getOpt(rest, "-o") orelse getOpt(rest, "--output") orelse blk: {
+                const base = std.fs.path.basename(its_path);
+                const stem = if (std.mem.endsWith(u8, base, ".its")) base[0 .. base.len - 4] else base;
+                break :blk try std.fs.path.join(aa, &.{ IMAGE_DIR, try std.fmt.allocPrint(aa, "{s}.itb", .{stem}) });
+            };
+            try ensureParentDir(io, out_path);
+            try writeBytes(io, out_path, blob);
+            try out.print("FIT 镜像: {s} ({d} bytes, 来源 {s}, timestamp=0x{X:0>8})\n", .{
+                out_path, blob.len, its_path, timestamp,
+            });
+            return;
+        }
+
         const kernel_path = getOpt(rest, "--kernel") orelse return error.MissingArgument;
         const kernel_data = try readBytes(io, aa, kernel_path);
         defer aa.free(kernel_data);
@@ -717,6 +742,40 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
             opts.kernel.name,
             if (opts.fdt) |f| f.name else "-",
             opts.default_config,
+        });
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "crypt")) {
+        const input = getOpt(rest, "--input") orelse return error.MissingArgument;
+        const key = try crypt.parseHex16(getOpt(rest, "--key") orelse return error.MissingArgument);
+        const iv = try crypt.parseHex16(getOpt(rest, "--iv") orelse return error.MissingArgument);
+        const decrypt_mode = hasFlag(rest, "--decrypt");
+        const pad = if (getOpt(rest, "--pad")) |p|
+            (if (std.mem.eql(u8, p, "zero")) crypt.Pad.zero else if (std.mem.eql(u8, p, "pkcs7")) crypt.Pad.pkcs7 else crypt.Pad.none)
+        else
+            crypt.Pad.none;
+
+        const data = try readBytes(io, aa, input);
+        defer aa.free(data);
+
+        const result = if (decrypt_mode)
+            try crypt.decrypt(aa, data, key, iv)
+        else
+            try crypt.encrypt(aa, data, key, iv, pad);
+        defer aa.free(result);
+
+        const out_path = getOpt(rest, "-o") orelse getOpt(rest, "--output") orelse blk: {
+            const base = std.fs.path.basename(input);
+            break :blk try std.fs.path.join(aa, &.{ IMAGE_DIR, try std.fmt.allocPrint(aa, "{s}.{s}.bin", .{ base, if (decrypt_mode) "dec" else "enc" }) });
+        };
+        try ensureParentDir(io, out_path);
+        try writeBytes(io, out_path, result);
+        try out.print("{s}: {s} ({d} -> {d} bytes, AES-128-CBC)\n", .{
+            if (decrypt_mode) "解密" else "加密",
+            out_path,
+            data.len,
+            result.len,
         });
         return;
     }

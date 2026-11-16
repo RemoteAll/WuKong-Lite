@@ -20,7 +20,9 @@ pub const modules = @import("tools/modules.zig");
 pub const image_cfg = @import("tools/image_cfg.zig");
 pub const fdt = @import("tools/fdt.zig");
 pub const itb = @import("tools/itb.zig");
+pub const its = @import("tools/its.zig");
 pub const elf2aic = @import("tools/elf2aic.zig");
+pub const crypt = @import("tools/crypt.zig");
 pub const partition_table = @import("tools/partition_table.zig");
 pub const pack = @import("tools/pack.zig");
 

@@ -47,14 +47,16 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
 - **配置驱动编译**（等价 `SConscript` + `GetDepend`）：`wk build` 按 `.config` 评估模块表，
   生成 `wk/config/build_plan.json` 与 `src/generated/config.zig`；shell 按生成的常量裁剪设备注册。
 - **FIT / ITB 打包**：`wk image itb` 直接生成标准 FIT（FDT 写入器 + images/configurations/timestamp），
-  结构与参考 `mkimage -f` 生成物一致。
+  结构与参考 `mkimage -f` 生成物一致；`--its <file.its>` 走自写 ITS 解析器直出 FIT。
+- **镜像加密**：`wk image crypt` 提供 AES-128-CBC 加/解密（`--pad none|zero|pkcs7`），
+  与参考 `openssl enc -aes-128-cbc -nopad` 逐字节一致。
 - **ELF 工具**：`wk image elf2aic`（按 PT_LOAD 展开为 AIC 可启动镜像）、
   `wk image elf2its`（按参考 `elf2image` 规则提取 `segN.bin` 并生成 ITS，XIP 段序交换）。
 
 ## 未实现（明确边界）
 
-- 镜像签名（RSA/SM2）与加密（AES-CBC）、ITB/FIT 签名与加密；
-- ITS 语法解析（`.its` → `.itb` 仍建议用参考 `mkimage -f`；本仓库提供 `elf2its` 生成 ITS）；
+- 镜像签名（RSA/SM2）与 AIC 头 `sign_algo/encrypt_algo` 区间联动（加密算法已可用，但未接入头部布局）；
+- ITS 中的 `signature*` / `cipher` 节点（解析到即报错，不做签名/加密）；
 - 真实 SoC 的寄存器级 HAL、启动汇编、链接脚本与交叉编译到 RISC-V；
 - RT-Thread/FreeRTOS/uCOS 内核本体、LVGL、lwIP、mbedTLS 等第三方包；
 - 文件系统镜像工具（makefatfs / mklittlefs / mkuffs）。
@@ -84,6 +86,8 @@ zig-out\bin\wk.exe image aic --input app.bin --load 0x40100000 --entry 0x4010000
 zig-out\bin\wk.exe image elf2aic --input app.elf -o app.aic
 zig-out\bin\wk.exe image elf2its --input app.elf -o app_os.its
 zig-out\bin\wk.exe image itb --kernel kernel.bin --fdt board.dtb --load 0x41000000 --entry 0x41000000 -o os.itb
+zig-out\bin\wk.exe image itb --its app_os.its -o os.itb
+zig-out\bin\wk.exe image crypt --input kernel.bin --key 000102030405060708090a0b0c0d0e0f --iv 101112131415161718191a1b1c1d1e1f --pad zero
 zig-out\bin\wk.exe image env --config wk/target/d13x/demo88-nor/pack/image_cfg.json -o env.bin
 zig-out\bin\wk.exe run hello
 zig-out\bin\wk.exe shell
@@ -109,6 +113,12 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
 - `wk image elf2its` 与 `tools/scripts/elf2image` 对同一 RISC-V ELF 生成的 `segN.bin` **哈希一致**、
   ITS 文本一致（忽略 CRLF）。
 - `wk image itb` 生成的 FDT 结构与参考 `mkimage -f` 生成的 FIT 一致（images/configurations/timestamp）。
+- `wk image itb --its <file.its>`（自写 ITS 解析器）与参考 `mkimage -f` 对比：
+  `fdt_dump.py` 导出的逻辑树 **逐项完全相同**（含 `hash-1` 的 `value`、`timestamp` 位置置根首）；
+  字节数不同只因 libfdt 会预留额外空间，结构等价。
+- `wk image crypt` 与参考 `tools/scripts/openssl.exe enc -aes-128-cbc -nopad -K … -iv …`
+  的**加密与解密双向均逐字节一致**（另含 NIST SP 800-38A 向量单测）；`--pad zero` 与
+  手工补零后的 openssl 输出一致。
 - 小样本回归向量（`a=b`、`-r -s 64`）已写入单元测试：`6D9AECC2 01 61 3D 62 00 00 FF...`。
 
 ## 测试覆盖
@@ -126,11 +136,13 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
 - OSAL 邮箱 FIFO/容量、信号量跨线程唤醒；
 - 设备框架注册/打开/读写/关闭、GPIO 电平、统计分配器；
 - 配置代码生成（Kconfig / `.config` → Zig 常量）、模块启用评估（含缺失符号诊断）；
-- FDT/FIT 生成（头/属性/数据/配置）、ELF32 段解析与 AIC 镜像、ELF→ITS 段提取。
+- FDT/FIT 生成（头/属性/数据/配置）、ELF32 段解析与 AIC 镜像、ELF→ITS 段提取；
+- ITS 解析（C 风格注释、`<0x..>` 单元表达式、`&label` 引用、重复标签、错误位置）与 hash 节点回填；
+- AES-128-CBC 加/解密往返、长度对齐错误、`zero`/`pkcs7` 补位。
 
 ## 继续开发建议
 
-1. 增加 `wk image itb`（FIT/ITB）与 `wk image sign/encrypt`；
+1. RSA/SM2 签名（`signature`/`cipher` 节点目前显式报错）与 AIC 头 `sign_algo/encrypt_algo` 区间联动；
 2. 增加 `src/bsp/artinchip/hal/*` 的寄存器模型与 `sys/d33x` 启动流程；
 3. 把 `build.zig` 接入 `.config`（按开关选择模块编译，等价 `SConscript` 的 `GetDepend`）；
 4. 增加 `makefatfs` / `mklittlefs` 的 Zig 版本与文件系统镜像回读校验。
