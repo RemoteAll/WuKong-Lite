@@ -76,6 +76,7 @@ pub const all = [_]Module{
             "src/tools/rsa.zig",
             "src/tools/sparse.zig",
             "src/tools/cpio.zig",
+            "src/tools/flashpack.zig",
         },
     },
     .{

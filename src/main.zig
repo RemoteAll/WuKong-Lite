@@ -22,6 +22,7 @@ const fat = aic.fat;
 const rsa = aic.rsa;
 const sparse = aic.sparse;
 const cpio = aic.cpio;
+const flashpack = aic.flashpack;
 const fw_image = aic.fw_image;
 const image = aic.image;
 const env_image = aic.env_image;
@@ -140,6 +141,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image rsaverify --input <file> --key <pub.pem> --sig <sig.bin>
         \\  image simg --input <raw> [--output <sparse>] [--block 4096] [--unsparse]
         \\  image cpio --list <file> --input-dir <dir> -o <ota.cpio> [--format crc|newc] [--mtime 0]
+        \\  image flashpack [--config <image_cfg.json>] [--payload-dir <dir>] [--out-dir <dir>]
         \\  image dump <file>
         \\
         \\  shell [-c "cmd"]            交互式 msh（uart0 / gpio0 模拟设备）
@@ -1025,6 +1027,37 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         return;
     }
 
+    if (std.mem.eql(u8, sub, "flashpack")) {
+        const cfg_path = getOpt(rest, "--config") orelse "wk/target/d13x/demo88-nor/pack/image_cfg.json";
+        const payload_dir = getOpt(rest, "--payload-dir") orelse try std.fs.path.join(aa, &.{ IMAGE_DIR, "demo" });
+        const out_dir = getOpt(rest, "--out-dir") orelse try std.fs.path.join(aa, &.{ IMAGE_DIR, "flash" });
+
+        var result = flashpack.run(aa, io, .{
+            .cfg_path = cfg_path,
+            .payload_dir = payload_dir,
+            .out_dir = out_dir,
+        }) catch |err| {
+            try out.print("flashpack 失败：{s}\n", .{@errorName(err)});
+            return err;
+        };
+        defer result.deinit(aa);
+
+        const manifest_path = try std.fs.path.join(aa, &.{ out_dir, "manifest.txt" });
+        defer aa.free(manifest_path);
+        try writeBytes(io, manifest_path, result.manifest);
+        const flash_md_path = try std.fs.path.join(aa, &.{ out_dir, "FLASH.md" });
+        defer aa.free(flash_md_path);
+        try writeBytes(io, flash_md_path, result.instructions);
+
+        try out.print("flashpack: {s}/{s}（{d} bytes，warnings={d}）\n", .{ out_dir, result.packed_name, result.firmware.len, result.warnings });
+        try out.print("  已生成 manifest.txt 与 FLASH.md\n", .{});
+        if (result.missing_required != 0) {
+            try out.print("  仍有 {d} 个必填组件缺失，请按 manifest.txt 补齐后重跑\n", .{result.missing_required});
+            return error.MissingRequiredComponents;
+        }
+        return;
+    }
+
     if (std.mem.eql(u8, sub, "pagetable")) {
         const input = getOpt(rest, "--input") orelse return error.MissingArgument;
         const page = try parseU32Opt(rest, "--page", 2);
@@ -1286,3 +1319,4 @@ fn ensureParentDir(io: std.Io, path: []const u8) !void {
         if (dir.len > 0) try std.Io.Dir.cwd().createDirPath(io, dir);
     }
 }
+

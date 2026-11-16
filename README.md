@@ -61,6 +61,8 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
   尾部补零），`--unsparse` 可展开；与参考 `img2simg.exe` 输出**逐字节一致**。
 - **cpio 归档**：`wk image cpio` 按文件清单生成 `newc`/`crc` 归档（名字/数据 4 字节对齐、
   `TRAILER!!!`、512 对齐），对应 `mkcpio.py` 里 `cpio -ov -H crc` 的 OTA 子镜像。
+- **烧写包准备**：`wk image flashpack` 读取 image_cfg 与 payload 目录，校验 AIC/FIT、
+  自动补 `env.bin`/`rodata.fatfs`、按分区大小检查，输出 AIC.FW + `manifest.txt` + `FLASH.md`。
 - **ELF 工具**：`wk image elf2aic`（按 PT_LOAD 展开为 AIC 可启动镜像）、
   `wk image elf2its`（按参考 `elf2image` 规则提取 `segN.bin` 并生成 ITS，XIP 段序交换）。
 
@@ -74,7 +76,9 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
 - `fatupdate.exe` 追加的 AICF `dirent_sect_id/dirent_data_len` 列表（NFTL 离线烧录用），
   我们写 0，`used_size` 按“元数据 + 实际分配簇”计算，与参考工具口径不同；
 - `mklittlefs` / `mkuffs` 文件系统镜像工具；
-- cpio 的 ino/dev/uid/gid 跟随宿主机（参考 cpio.exe 也如此），因此不保证跨机字节一致。
+- cpio 的 ino/dev/uid/gid 跟随宿主机（参考 cpio.exe 也如此），因此不保证跨机字节一致；
+- PBP/loader 组合、USB/UART 烧写上位机协议与 RTOS/HAL 本体：`flashpack` 只打包+校验，
+  **不能代替厂商 bootloader 与烧写工具**（AiBurn / upgcmd）。
 
 遇到未实现的配置（如 `sign` / `encrypt`）会明确报错，不会静默生成坏镜像。
 
@@ -110,6 +114,7 @@ zig-out\bin\wk.exe image rsasign --input os.bin --key rsa2048.pem -o os.sig
 zig-out\bin\wk.exe image rsaverify --input os.bin --key rsa2048_pub.pem --sig os.sig
 zig-out\bin\wk.exe image simg --input data.img --output data.img.sparse --block 4096
 zig-out\bin\wk.exe image cpio --list ota-list.txt --input-dir out --output ota.cpio
+zig-out\bin\wk.exe image flashpack --payload-dir payload --out-dir flash
 zig-out\bin\wk.exe image env --config wk/target/d13x/demo88-nor/pack/image_cfg.json -o env.bin
 zig-out\bin\wk.exe run hello
 zig-out\bin\wk.exe shell
@@ -154,6 +159,8 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
   及 1 MiB FAT 镜像上输出**逐字节完全一致**（block=1024）。
 - `wk image cpio` 生成的归档能直接被参考 `cpio.exe -idm` 解开（文件与目录内容一致）；
   与参考归档做“归一化头字段”后比较，名字顺序/数据/校验和/对齐**完全一致**。
+- `wk image flashpack` 自测（demo payload）：生成 27,136 字节 AIC.FW，manifest 列出每个组件的
+  SHA256/分区/状态；缺 env.txt 时报 `MISSING(optional)`，补齐后自动生成 env.bin 且 warnings 归零。
 - 小样本回归向量（`a=b`、`-r -s 64`）已写入单元测试：`6D9AECC2 01 61 3D 62 00 00 FF...`。
 
 ## 测试覆盖
@@ -185,4 +192,5 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
 1. SM2 签名、RSA-PSS、加密私钥，以及把 RSA 签名接入 ITS `signature` 节点与 AIC 头区间；
 2. 增加 `src/bsp/artinchip/hal/*` 的寄存器模型与 `sys/d33x` 启动流程；
 3. 把 `build.zig` 接入 `.config`（按开关选择模块编译，等价 `SConscript` 的 `GetDepend`）；
-4. 补 FAT32、`makefatfs.py --fullpart` 与 AICF dirent 列表，以及 `mklittlefs` / `mkuffs` 镜像工具。
+4. 补 FAT32、`makefatfs.py --fullpart` 与 AICF dirent 列表，以及 `mklittlefs` / `mkuffs` 镜像工具；
+5. 接入厂商 PBP 生成与烧写协议（AiBurn/upgcmd）才能真正脱离厂商 SDK 上板。

@@ -61,6 +61,7 @@
 | `rsa.zig` | `mk_image.py` 的 PKCS1_v1_5 + U-Boot bootm | PEM/DER 解析、PKCS#1 v1.5 SHA-256 签名/验签 |
 | `sparse.zig` | `img2simg` / `simg2img` | Android sparse（零块 FILL、其余 RAW、尾部补齐） |
 | `cpio.zig` | `mkcpio.py`（`cpio -ov -H crc`） | newc/crc 归档、4 字节对齐、TRAILER、512 对齐 |
+| `flashpack.zig` | `mk_image.py` + 烧写前检查 | 组件校验/补齐、分区上限检查、AIC.FW、manifest/FLASH.md |
 
 ## 6. 应用与 shell
 
@@ -146,5 +147,7 @@ FAT12 项：entry0 = 0xFF8、entry1 = 0xFFF；FAT16：0xFFF8 / 0xFFFF
   输出与参考 `img2simg.exe` 逐字节一致。
 - **cpio 归档**：`wk image cpio --list files.txt --input-dir out -o ota.cpio`
   （默认 `crc`，可选 `--format newc`）；可用参考 `cpio.exe -idm` 回读。
+- **烧写包**：`wk image flashpack [--payload-dir payload] [--out-dir flash]`；
+  payload 放真实厂商 `bootloader.aic` / OS 文件；输出 AIC.FW + manifest + FLASH.md。
 - **未实现（明确边界）**：RSA/SM2 签名、AIC 头 `sign_algo/encrypt_algo` 与 iv/sign 区的联动布局、
   makefatfs/mklittlefs 文件系统镜像。
