@@ -49,6 +49,11 @@
 | `image_cfg.zig` | `mk_image.py::parse_image_cfg` | 去注释 JSON、media/part/attr 解析 |
 | `partition_table.zig` | `gen_partition_table.py` | MTD/UBI/GPT 宏、FAL 表、JSON、env 前缀 |
 | `pack.zig` | `mk_image.py`（打包部分） | AIC.FW 组装、AIC 镜像、env、页表 |
+| `codegen.zig` | `chk_prj_config` 的 C 头生成 | `.config` / Kconfig → `src/generated/config.zig` |
+| `modules.zig` | `SConscript` + `GetDepend` | 模块启用评估、`build_plan.json` |
+| `fdt.zig` | `mkimage -f`（FDT 部分） | DEVICE TREE blob 写入器 |
+| `itb.zig` | `mk_image.py::itb` | FIT/ITB（images/configurations/timestamp） |
+| `elf2aic.zig` | `elf2image` + AIC 头 | ELF32/64 段解析、AIC 展开、ITS 段提取 |
 
 ## 6. 应用与 shell
 
@@ -57,8 +62,9 @@
 | `src/shell/shell.zig` | 分词、命令分派、交互式循环（stdin） |
 | `src/shell/cmds.zig` | `help/version/uptime/ps/free/date/list_device/part/gpio/reboot` |
 | `src/application/helloworld.zig` | 线程 + 邮箱 + 信号量示例 |
-| `src/main.zig` | `wk` CLI：`defconfig/config/image/shell/run/demo` |
+| `src/main.zig` | `wk` CLI：`defconfig/config/build/image/shell/run/demo` |
 | `src/aic.zig` | 顶层模块导出（测试入口） |
+| `src/generated/config.zig` | 生成：配置常量（`wk defconfig` / `wk build` 写入） |
 
 ## 7. 关键格式速查
 
@@ -88,8 +94,9 @@ file_off  数据区，每个文件 2 KiB 对齐，空隙填 0
 ### U-Boot env
 
 ```
-单一：u32 crc32(data) | data[size-4]（NUL 分隔，0x00 填充）
-双份：u32 crc | u8 flags(1=active,0=obsolete) | data[size-5]，连续两份
+单一：u32 crc32(data) | data[size-4]（NUL 分隔，0xFF 填充）
+冗余：u32 crc | u8 flags(1=active,0=obsolete) | data[size-5]
+      （-r 只输出一份，第二份由 bootloader 生成；CRC 覆盖整个数据区含填充）
 ```
 
 ### NAND 页表（AICP）
@@ -103,6 +110,7 @@ entry(20B)×101: pageaddr1 + pageaddr2 + checksum2 + reserved + checksum1
 ## 8. 常见任务
 
 - **加一个新的板级方案**：复制 `wk/target/configs/*_defconfig` 改 `PRJ_*`，在对应 `Kconfig.board` 增加开关，执行 `wk defconfig`。
-- **加一个配置项**：在 Kconfig 中 `config XXX`，`bool/string/int` + `default`；生成结果自动进 `.config` / `cconfig.h`。
-- **加一个镜像组件**：编辑板级 `image_cfg.json` 的 `image.target`，`part` 指向已定义分区；`wk demo` / `wk image pack` 验证。
-- **排查镜像**：`wk image dump <file>`（自动识别 AIC / AIC.FW / env）。
+- **加一个配置项**：在 Kconfig 中 `config XXX`，`bool/string/int` + `default`；生成结果自动进 `.config` / `cconfig.h` / `config.zig`。
+- **加一个模块**：在 `src/tools/modules.zig` 登记 sources/requires/deps，执行 `wk build` 查看启用状态。
+- **ELF 固件**：`wk image elf2its --input app.elf -o app_os.its` 生成 ITS + `segN.bin`（可直接交给 `mkimage -f`）。
+- **FIT 镜像**：`wk image itb --kernel ... --fdt ... -o os.itb`（无需 mkimage）。

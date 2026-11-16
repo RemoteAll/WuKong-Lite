@@ -13,11 +13,16 @@ const kconfig = aic.kconfig;
 const image_cfg = aic.image_cfg;
 const partition_table = aic.partition_table;
 const pack = aic.pack;
+const itb = aic.itb;
+const elf2aic = aic.elf2aic;
 const fw_image = aic.fw_image;
 const image = aic.image;
 const env_image = aic.env_image;
 const partition = aic.partition;
 const utils = aic.utils;
+const codegen = aic.codegen;
+const modules = aic.modules;
+const board_config = @import("generated/config.zig");
 
 const osal = @import("kernel/common/osal.zig");
 const device = @import("kernel/common/device.zig");
@@ -32,6 +37,8 @@ const CONFIG_DIR = "wk/config";
 const IMAGE_DIR = "wk/image";
 const KCONFIG_ROOT = "wk/Kconfig";
 const CONFIG_PLANS = "wk/target/configs";
+const GENERATED_CONFIG = "src/generated/config.zig";
+const BUILD_PLAN = "wk/config/build_plan.json";
 
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
@@ -80,6 +87,8 @@ fn dispatch(io: std.Io, aa: std.mem.Allocator, argv: []const []const u8, out: *s
         try cmdDefconfig(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "config")) {
         try cmdConfig(io, aa, rest, out);
+    } else if (std.mem.eql(u8, cmd, "build")) {
+        try cmdBuild(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "image")) {
         try cmdImage(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "shell")) {
@@ -105,11 +114,15 @@ fn usage(out: *std.Io.Writer) !void {
         \\  config list                打印 .config
         \\  config get <SYMBOL>        查询配置项
         \\  config set <SYMBOL> <值>   修改配置项并同步 cconfig.h
+        \\  build                      按 .config 生成 config.zig 与编译计划（等价 SConscript）
         \\
         \\  image part --config <json> [--out header.h] [--json parts.json]
         \\  image env  (--config <json> | --input env.txt --size 4096) [--redundant] [-o env.bin]
         \\  image aic  --input <bin> [--load 0x...] [--entry 0x...] [-o out.aic]
+        \\  image elf2aic --input <elf> [--head-ver 0x...] [-o out.aic]
+        \\  image elf2its --input <elf> [--version 1.0.0] [--hash crc32,md5|--no-hash] [-o out_os.its]
         \\  image pack --config <json> [--datadir <dir>] [-o out.img]
+        \\  image itb --kernel <bin> [--fdt <dtb>] [--ramdisk <bin>] [--load 0x...] [--entry 0x...] [-o out.itb]
         \\  image pagetable --input <spl.bin> [--page 2] [--block 128] [--planes 1] [-o page.bin]
         \\  image dump <file>
         \\
@@ -123,6 +136,13 @@ fn usage(out: *std.Io.Writer) !void {
 fn cmdVersion(out: *std.Io.Writer) !void {
     const builtin = @import("builtin");
     try out.print("WuKong-Lite 0.1.0 (Zig {s}, {s})\n", .{ builtin.zig_version_string, @tagName(builtin.mode) });
+    try out.print("当前方案: {s} ({s}/{s}/{s}/{s})\n", .{
+        board_config.PRJ_DEFCONFIG_FILENAME,
+        board_config.PRJ_CHIP,
+        board_config.PRJ_BOARD,
+        board_config.PRJ_KERNEL,
+        board_config.PRJ_APP,
+    });
     try out.writeAll("兼容目标: Luban-Lite 2.0（ArtInChip D13x/D12x/D21x 等 SoC 的 SDK 结构）\n");
 }
 
@@ -198,8 +218,11 @@ fn cmdDefconfig(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out
     const info_path = try std.fs.path.join(aa, &.{ CONFIG_DIR, "build_info.json" });
     try writeText(io, info_path, info.written());
 
+    // 生成 src/generated/config.zig 与编译计划（等价 SConscript 模块收集）
+    const cfg_zig_path = try writeGeneratedConfig(io, aa, &cfg, dot.written());
+
     try out.print("已应用方案: {s}\n", .{file_name});
-    try out.print("  {s}\n  {s}\n  {s}\n", .{ dot_path, hdr_path, info_path });
+    try out.print("  {s}\n  {s}\n  {s}\n  {s}\n  {s}\n", .{ dot_path, hdr_path, info_path, cfg_zig_path, BUILD_PLAN });
     try out.print("工程: {s} (chip={s} board={s} kernel={s} app={s})\n", .{
         prj_name,
         cfg.get("PRJ_CHIP") orelse "?",
@@ -258,11 +281,85 @@ fn cmdConfig(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *
         const hdr_path = try std.fs.path.join(aa, &.{ CONFIG_DIR, "cconfig.h" });
         try writeText(io, hdr_path, hdr.written());
 
+        const cfg_zig_path = try writeGeneratedConfigFromDot(io, aa, updated);
+
         try out.print("CONFIG_{s}={s}\n", .{ normalizeSymbol(args[1]), args[2] });
-        try out.print("已更新 {s} 与 {s}\n", .{ dot_path, hdr_path });
+        try out.print("已更新 {s}、{s} 与 {s}\n", .{ dot_path, hdr_path, cfg_zig_path });
         return;
     }
     try out.writeAll("usage: wk config list|get <SYMBOL>|set <SYMBOL> <值>\n");
+}
+
+/// 根据当前 `.config` 生成 `src/generated/config.zig` 与 `build_plan.json`（返回生成文件路径）。
+fn writeGeneratedConfigFromDot(io: std.Io, aa: std.mem.Allocator, dot_text: []const u8) ![]const u8 {
+    var zig: std.Io.Writer.Allocating = .init(aa);
+    defer zig.deinit();
+    try codegen.generateFromDot(&zig.writer, dot_text);
+    try writeText(io, GENERATED_CONFIG, zig.written());
+
+    try writeBuildPlan(io, aa, dot_text);
+    return GENERATED_CONFIG;
+}
+
+/// 从带类型信息的 Kconfig 配置直接生成（defconfig 路径）。
+fn writeGeneratedConfig(io: std.Io, aa: std.mem.Allocator, cfg: *kconfig.Config, dot_text: []const u8) ![]const u8 {
+    var zig: std.Io.Writer.Allocating = .init(aa);
+    defer zig.deinit();
+    try codegen.generate(cfg, &zig.writer);
+    try writeText(io, GENERATED_CONFIG, zig.written());
+
+    try writeBuildPlan(io, aa, dot_text);
+    return GENERATED_CONFIG;
+}
+
+fn writeBuildPlan(io: std.Io, aa: std.mem.Allocator, dot_text: []const u8) !void {
+    const status = try modules.evaluate(aa, dot_text);
+    defer modules.freeStatus(aa, status);
+
+    var plan: std.Io.Writer.Allocating = .init(aa);
+    defer plan.deinit();
+    try modules.writePlanJson(aa, status, &plan.writer);
+    try writeText(io, BUILD_PLAN, plan.written());
+}
+
+fn cmdBuild(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std.Io.Writer) !void {
+    _ = args;
+    const dot_path = try std.fs.path.join(aa, &.{ CONFIG_DIR, ".config" });
+    const dot_text = std.Io.Dir.cwd().readFileAlloc(io, dot_path, aa, .unlimited) catch |err| switch (err) {
+        error.FileNotFound => {
+            try out.writeAll("wk: 尚未生成 .config，请先执行 wk defconfig <方案>\n");
+            return error.ConfigMissing;
+        },
+        else => return err,
+    };
+
+    _ = try writeGeneratedConfigFromDot(io, aa, dot_text);
+
+    const status = try modules.evaluate(aa, dot_text);
+    defer modules.freeStatus(aa, status);
+
+    try out.print("{s:<8} {s:<18} {s}\n", .{ "Enable", "Module", "Sources" });
+    try out.writeAll("------------------------------------------------------------\n");
+    var enabled_count: usize = 0;
+    for (status) |s| {
+        if (s.enabled) enabled_count += 1;
+        try out.print("[{s}]      {s:<18} {d}\n", .{
+            if (s.enabled) "x" else " ",
+            s.module.name,
+            s.module.sources.len,
+        });
+        if (!s.enabled and s.missing.len > 0) {
+            try out.writeAll("           missing: ");
+            for (s.missing, 0..) |m, i| {
+                if (i != 0) try out.writeAll(", ");
+                try out.writeAll(m);
+            }
+            try out.writeByte('\n');
+        }
+    }
+    try out.print("\n模块: {d}/{d} 启用\n", .{ enabled_count, status.len });
+    try out.print("已生成 {s} 与 {s}\n", .{ GENERATED_CONFIG, BUILD_PLAN });
+    try out.writeAll("下一步: zig build （Zig 会按 config.zig 的常量裁剪注册逻辑）\n");
 }
 
 fn normalizeSymbol(name: []const u8) []const u8 {
@@ -496,6 +593,134 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         return;
     }
 
+    if (std.mem.eql(u8, sub, "elf2its")) {
+        const input = getOpt(rest, "--input") orelse return error.MissingArgument;
+        const elf = try readBytes(io, aa, input);
+        defer aa.free(elf);
+
+        const segs = try elf2aic.itsSegments(aa, elf);
+        defer elf2aic.freeItsSegments(aa, segs);
+
+        const its_path = getOpt(rest, "-o") orelse getOpt(rest, "--output") orelse blk: {
+            const base = std.fs.path.basename(input);
+            const stem = if (std.mem.endsWith(u8, base, ".elf")) base[0 .. base.len - 4] else base;
+            break :blk try std.fs.path.join(aa, &.{ IMAGE_DIR, try std.fmt.allocPrint(aa, "{s}_os.its", .{stem}) });
+        };
+        const out_dir = std.fs.path.dirname(its_path) orelse ".";
+        try std.Io.Dir.cwd().createDirPath(io, out_dir);
+
+        for (segs, 0..) |seg, i| {
+            const seg_path = try std.fs.path.join(aa, &.{ out_dir, try std.fmt.allocPrint(aa, "seg{d}.bin", .{i}) });
+            try writeBytes(io, seg_path, seg.data);
+        }
+
+        var its_text: std.Io.Writer.Allocating = .init(aa);
+        defer its_text.deinit();
+        const version = getOpt(rest, "--version") orelse "1.0.0";
+        const description = getOpt(rest, "--description") orelse "Luban-lite firmware";
+        var algos: std.ArrayList([]const u8) = .empty;
+        defer algos.deinit(aa);
+        if (!hasFlag(rest, "--no-hash")) {
+            if (getOpt(rest, "--hash")) |list| {
+                var it = std.mem.splitScalar(u8, list, ',');
+                while (it.next()) |algo| {
+                    if (algo.len > 0) try algos.append(aa, algo);
+                }
+            } else {
+                try algos.append(aa, "crc32");
+                try algos.append(aa, "md5");
+            }
+        }
+        try elf2aic.generateIts(&its_text.writer, segs, version, description, algos.items);
+        try writeBytes(io, its_path, its_text.written());
+
+        try out.print("ITS 文件: {s}（{d} 个段, 数据目录 {s}）\n", .{ its_path, segs.len, out_dir });
+        for (segs, 0..) |seg, i| {
+            try out.print("  seg{d}.bin  {d} bytes  load=0x{X:0>8} entry=0x{X:0>8}\n", .{ i, seg.data.len, seg.load_addr, seg.entry });
+        }
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "elf2aic")) {
+        const input = getOpt(rest, "--input") orelse return error.MissingArgument;
+        const elf = try readBytes(io, aa, input);
+        defer aa.free(elf);
+
+        const info = try elf2aic.inspect(elf);
+        const head_ver = try parseU32Opt(rest, "--head-ver", image.HEAD_VER_1_0_0);
+        const out_bytes = try elf2aic.convert(aa, elf, head_ver);
+        defer aa.free(out_bytes);
+
+        const out_path = getOpt(rest, "-o") orelse getOpt(rest, "--output") orelse blk: {
+            const base = std.fs.path.basename(input);
+            const stem = if (std.mem.endsWith(u8, base, ".elf")) base[0 .. base.len - 4] else base;
+            break :blk try std.fs.path.join(aa, &.{ IMAGE_DIR, try std.fmt.allocPrint(aa, "{s}.aic", .{stem}) });
+        };
+        try ensureParentDir(io, out_path);
+        try writeBytes(io, out_path, out_bytes);
+        try out.print("AIC 镜像: {s} ({d} bytes, load=0x{X:0>8}, entry=0x{X:0>8}, span={d}, PT_LOAD={d})\n", .{
+            out_path,
+            out_bytes.len,
+            info.load_address,
+            info.entry,
+            info.span,
+            info.segments,
+        });
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "itb")) {
+        const kernel_path = getOpt(rest, "--kernel") orelse return error.MissingArgument;
+        const kernel_data = try readBytes(io, aa, kernel_path);
+        defer aa.free(kernel_data);
+
+        var opts = itb.Options{
+            .description = getOpt(rest, "--description") orelse "WuKong-Lite FIT image",
+            .timestamp = parseOptionalU32(rest, "--timestamp") orelse currentTimestamp(io),
+            .default_config = getOpt(rest, "--config") orelse "conf-1",
+            .kernel = .{
+                .name = getOpt(rest, "--kernel-name") orelse "kernel-1",
+                .data = kernel_data,
+                .arch = getOpt(rest, "--arch") orelse "riscv",
+                .os = getOpt(rest, "--os") orelse "linux",
+                .load = parseOptionalU32(rest, "--load"),
+                .entry = parseOptionalU32(rest, "--entry"),
+            },
+        };
+
+        var fdt_data: ?[]u8 = null;
+        defer if (fdt_data) |d| aa.free(d);
+        if (getOpt(rest, "--fdt")) |p| {
+            fdt_data = try readBytes(io, aa, p);
+            opts.fdt = .{ .name = "fdt-1", .data = fdt_data.?, .type_ = "flat_dt" };
+        }
+        var ramdisk_data: ?[]u8 = null;
+        defer if (ramdisk_data) |d| aa.free(d);
+        if (getOpt(rest, "--ramdisk")) |p| {
+            ramdisk_data = try readBytes(io, aa, p);
+            opts.ramdisk = .{ .name = "ramdisk-1", .data = ramdisk_data.?, .type_ = "ramdisk" };
+        }
+
+        const blob = try itb.build(aa, opts);
+        defer aa.free(blob);
+
+        const out_path = getOpt(rest, "-o") orelse getOpt(rest, "--output") orelse blk: {
+            const base = std.fs.path.basename(kernel_path);
+            const stem = if (std.mem.endsWith(u8, base, ".bin")) base[0 .. base.len - 4] else base;
+            break :blk try std.fs.path.join(aa, &.{ IMAGE_DIR, try std.fmt.allocPrint(aa, "{s}.itb", .{stem}) });
+        };
+        try ensureParentDir(io, out_path);
+        try writeBytes(io, out_path, blob);
+        try out.print("FIT 镜像: {s} ({d} bytes, kernel={s}, fdt={s}, 配置={s})\n", .{
+            out_path,
+            blob.len,
+            opts.kernel.name,
+            if (opts.fdt) |f| f.name else "-",
+            opts.default_config,
+        });
+        return;
+    }
+
     if (std.mem.eql(u8, sub, "pagetable")) {
         const input = getOpt(rest, "--input") orelse return error.MissingArgument;
         const page = try parseU32Opt(rest, "--page", 2);
@@ -554,13 +779,16 @@ fn cmdShell(io: std.Io, gpa: std.mem.Allocator, args: []const []const u8, out: *
     defer registry.deinit();
 
     var uart: uart_drv.Uart = undefined;
-    uart.init("uart0", io);
-    try registry.register(&uart.dev);
-    const console = try registry.open("uart0");
+    if (board_config.AIC_UART_DRV and board_config.AIC_USING_UART0) {
+        uart.init(board_config.AIC_CONSOLE_DEVICE, io);
+        try registry.register(&uart.dev);
+    }
 
     var gpio: gpio_drv.Gpio = .{};
-    gpio.init("gpio0");
-    try registry.register(&gpio.dev);
+    if (board_config.AIC_GPIO_DRV and board_config.AIC_USING_GPIO) {
+        gpio.init("gpio0");
+        try registry.register(&gpio.dev);
+    }
 
     var shell = shell_mod.Shell{
         .allocator = allocator,
@@ -568,7 +796,7 @@ fn cmdShell(io: std.Io, gpa: std.mem.Allocator, args: []const []const u8, out: *
         .kernel = &kernel,
         .devices = &registry,
         .heap = &counting,
-        .gpio = &gpio,
+        .gpio = if (board_config.AIC_GPIO_DRV and board_config.AIC_USING_GPIO) &gpio else null,
         .commands = &cmds.default_commands,
     };
 
@@ -577,8 +805,7 @@ fn cmdShell(io: std.Io, gpa: std.mem.Allocator, args: []const []const u8, out: *
         return;
     }
 
-    _ = console;
-    try out.writeAll("\nWuKong-Lite msh (type 'help', 'exit' to quit)\n");
+    try out.print("\nWuKong-Lite msh [{s}/{s}] (type 'help', 'exit' to quit)\n", .{ board_config.PRJ_CHIP, board_config.PRJ_BOARD });
     try out.flush();
     try shell.run(out);
 }
@@ -614,6 +841,8 @@ fn cmdDemo(io: std.Io, aa: std.mem.Allocator, out: *std.Io.Writer) !void {
     try cfg.writeHeader(&hdr.writer);
     try writeText(io, try std.fs.path.join(aa, &.{ CONFIG_DIR, "cconfig.h" }), hdr.written());
 
+    _ = try writeGeneratedConfig(io, aa, &cfg, dot.written());
+
     // 2) 生成演示用原始文件
     const payloads = [_]struct { name: []const u8, data: []const u8 }{
         .{ .name = "psram.bin", .data = "WUKONG-PSRAM-INIT-PAYLOAD\n" },
@@ -640,7 +869,7 @@ fn cmdDemo(io: std.Io, aa: std.mem.Allocator, out: *std.Io.Writer) !void {
     try writeBytes(io, try std.fs.path.join(aa, &.{ demo_dir, "os.aic" }), os_aic);
 
     // 4) 分区串 + 环境变量镜像
-    const cfg_path = try std.fs.path.join(aa, &.{ "wk/target/d13x/demo88-nor/pack/image_cfg.json" });
+    const cfg_path = try std.fs.path.join(aa, &.{"wk/target/d13x/demo88-nor/pack/image_cfg.json"});
     var image_cfg_parsed = try image_cfg.load(aa, io, cfg_path);
     defer image_cfg_parsed.deinit();
     const prefix = try partition_table.partsForEnv(aa, image_cfg_parsed.root().*);
@@ -720,6 +949,17 @@ fn parseU32Opt(args: []const []const u8, name: []const u8, default: u32) !u32 {
     return std.fmt.parseInt(u32, v, 0);
 }
 
+fn parseOptionalU32(args: []const []const u8, name: []const u8) ?u32 {
+    const v = getOpt(args, name) orelse return null;
+    return std.fmt.parseInt(u32, v, 0) catch null;
+}
+
+fn currentTimestamp(io: std.Io) u32 {
+    const seconds = std.Io.Timestamp.now(io, .real).toSeconds();
+    if (seconds <= 0 or seconds > std.math.maxInt(u32)) return 0x5F00_0000;
+    return @intCast(seconds);
+}
+
 fn writeText(io: std.Io, path: []const u8, text: []const u8) !void {
     try ensureParentDir(io, path);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = text });
@@ -742,4 +982,3 @@ fn ensureParentDir(io: std.Io, path: []const u8) !void {
         if (dir.len > 0) try std.Io.Dir.cwd().createDirPath(io, dir);
     }
 }
-

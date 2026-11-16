@@ -15,7 +15,12 @@ pub const env_image = @import("bsp/common/env_image.zig");
 pub const gpt = @import("bsp/common/gpt.zig");
 pub const fw_image = @import("bsp/common/fw_image.zig");
 pub const kconfig = @import("tools/kconfig.zig");
+pub const codegen = @import("tools/codegen.zig");
+pub const modules = @import("tools/modules.zig");
 pub const image_cfg = @import("tools/image_cfg.zig");
+pub const fdt = @import("tools/fdt.zig");
+pub const itb = @import("tools/itb.zig");
+pub const elf2aic = @import("tools/elf2aic.zig");
 pub const partition_table = @import("tools/partition_table.zig");
 pub const pack = @import("tools/pack.zig");
 

@@ -10,9 +10,8 @@ pub const Gpio = struct {
     pins: [GPIO_MAX_PIN]bool = @splat(false),
 
     pub fn init(self: *Gpio, name: []const u8) void {
+        self.dev = .{ .typ = .misc, .ops = &ops, .user_data = self };
         self.dev.setName(name);
-        self.dev.ops = &ops;
-        self.dev.user_data = self;
     }
 
     pub fn set(self: *Gpio, pin: u32, value: bool) !void {

@@ -44,10 +44,17 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
 - **OSAL / 设备 / shell**：线程注册、互斥量、信号量、邮箱、节拍、设备注册/打开/读写、
   `uart0`（stdout）与 `gpio0` 模拟、`help/ps/free/date/list_device/part/gpio` 等 msh 命令。
 - **HelloWorld 示例**：主线程 + 生产者线程，通过邮箱传递消息、信号量同步。
+- **配置驱动编译**（等价 `SConscript` + `GetDepend`）：`wk build` 按 `.config` 评估模块表，
+  生成 `wk/config/build_plan.json` 与 `src/generated/config.zig`；shell 按生成的常量裁剪设备注册。
+- **FIT / ITB 打包**：`wk image itb` 直接生成标准 FIT（FDT 写入器 + images/configurations/timestamp），
+  结构与参考 `mkimage -f` 生成物一致。
+- **ELF 工具**：`wk image elf2aic`（按 PT_LOAD 展开为 AIC 可启动镜像）、
+  `wk image elf2its`（按参考 `elf2image` 规则提取 `segN.bin` 并生成 ITS，XIP 段序交换）。
 
 ## 未实现（明确边界）
 
-- 镜像签名（RSA/SM2）与加密（AES-CBC）、ITB/FIT、SPI 屏加密；
+- 镜像签名（RSA/SM2）与加密（AES-CBC）、ITB/FIT 签名与加密；
+- ITS 语法解析（`.its` → `.itb` 仍建议用参考 `mkimage -f`；本仓库提供 `elf2its` 生成 ITS）；
 - 真实 SoC 的寄存器级 HAL、启动汇编、链接脚本与交叉编译到 RISC-V；
 - RT-Thread/FreeRTOS/uCOS 内核本体、LVGL、lwIP、mbedTLS 等第三方包；
 - 文件系统镜像工具（makefatfs / mklittlefs / mkuffs）。
@@ -67,10 +74,16 @@ zig-out\bin\wk.exe defconfig d13x_demo88-nor_rt-thread_helloworld
 # 2) 端到端演示：AIC 镜像 -> env -> AIC.FW 固件包 -> 分区表
 zig-out\bin\wk.exe demo
 
-# 3) 常用工具
+# 3) 配置驱动的模块收集（等价 SConscript），生成 build_plan.json / config.zig
+zig-out\bin\wk.exe build
+
+# 4) 常用工具
 zig-out\bin\wk.exe image dump wk/image/demo/demo88-nor.img
 zig-out\bin\wk.exe image part --config wk/target/d13x/demo88-nor/pack/image_cfg.json
 zig-out\bin\wk.exe image aic --input app.bin --load 0x40100000 --entry 0x40100000 -o app.aic
+zig-out\bin\wk.exe image elf2aic --input app.elf -o app.aic
+zig-out\bin\wk.exe image elf2its --input app.elf -o app_os.its
+zig-out\bin\wk.exe image itb --kernel kernel.bin --fdt board.dtb --load 0x41000000 --entry 0x41000000 -o os.itb
 zig-out\bin\wk.exe image env --config wk/target/d13x/demo88-nor/pack/image_cfg.json -o env.bin
 zig-out\bin\wk.exe run hello
 zig-out\bin\wk.exe shell
@@ -93,6 +106,9 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
   `tools/scripts/mkenvimage.exe -r -s 4096` **SHA256 完全一致**（含 0xFF 填充、flags 字节与 CRC 覆盖范围）。
 - `wk image part --config ... --out/--json` 的输出与 `tools/scripts/gen_partition_table.py` 内容一致
   （Windows 下 Python 文本模式写 CRLF；忽略行尾差异后逐字节相同）。
+- `wk image elf2its` 与 `tools/scripts/elf2image` 对同一 RISC-V ELF 生成的 `segN.bin` **哈希一致**、
+  ITS 文本一致（忽略 CRLF）。
+- `wk image itb` 生成的 FDT 结构与参考 `mkimage -f` 生成的 FIT 一致（images/configurations/timestamp）。
 - 小样本回归向量（`a=b`、`-r -s 64`）已写入单元测试：`6D9AECC2 01 61 3D 62 00 00 FF...`。
 
 ## 测试覆盖
@@ -108,7 +124,9 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
 - 分区布局偏移、MTD 宏与 FAL 表、JSON 输出；
 - AIC.FW 打包/解析、组件顺序/CRC、NAND 页表校验；
 - OSAL 邮箱 FIFO/容量、信号量跨线程唤醒；
-- 设备框架注册/打开/读写/关闭、GPIO 电平、统计分配器。
+- 设备框架注册/打开/读写/关闭、GPIO 电平、统计分配器；
+- 配置代码生成（Kconfig / `.config` → Zig 常量）、模块启用评估（含缺失符号诊断）；
+- FDT/FIT 生成（头/属性/数据/配置）、ELF32 段解析与 AIC 镜像、ELF→ITS 段提取。
 
 ## 继续开发建议
 

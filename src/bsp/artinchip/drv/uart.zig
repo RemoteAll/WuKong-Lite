@@ -13,9 +13,8 @@ pub const Uart = struct {
     pub fn init(self: *Uart, name: []const u8, io: std.Io) void {
         self.io = io;
         self.out = std.Io.File.stdout().writer(io, &self.out_buf);
+        self.dev = .{ .typ = .char, .ops = &ops, .user_data = self };
         self.dev.setName(name);
-        self.dev.ops = &ops;
-        self.dev.user_data = self;
     }
 
     pub fn writeText(self: *Uart, text: []const u8) !void {
