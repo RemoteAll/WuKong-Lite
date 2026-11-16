@@ -1,0 +1,43 @@
+#
+# demo88-nor 板级配置（对应 `target/<soc>/<board>/Kconfig.board`）
+#
+menu "Board demo88-nor"
+
+config AIC_BOARD_DEMO88_NOR
+    bool "demo88-nor"
+    default y
+
+config AIC_BOARD_MEDIA
+    string "Boot media"
+    default "spi-nor"
+
+config AIC_BOARD_SPINOR_SIZE
+    string "SPI NOR size"
+    default "16m"
+
+config AIC_BOARD_CONSOLE
+    string "Board console"
+    default "uart0"
+
+config AIC_BOARD_CONSOLE_BAUD
+    int "Console baud rate"
+    default 115200
+
+config AIC_BOOTLOADER_LOAD_BASE
+    hex "Bootloader load address"
+    default 0x40100000
+
+config AIC_BOOTLOADER_TEXT_BASE
+    hex "Bootloader entry address"
+    default 0x40100000
+
+config AIC_USING_LVGL
+    bool "Enable LVGL UI"
+    default n
+
+config AIC_LVGL_COLOR_DEPTH
+    int "LVGL color depth"
+    depends on AIC_USING_LVGL
+    default 16
+
+endmenu

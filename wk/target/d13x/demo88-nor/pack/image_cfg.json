@@ -1,0 +1,87 @@
+{
+    "spi-nor": {
+        "size": "16m",
+        "partitions": {
+            "spl":   { "size": "512k" },
+            "env":   { "size": "128k" },
+            "env_r": { "size": "128k" },
+            "os":    { "size": "2m" },
+            "rodata": { "size": "8m" },
+            "data":  { "size": "-" }
+        },
+    },
+    "image": {
+        "info": {
+            "platform": "d13x",
+            "product": "demo88-nor",
+            "version": "1.0.0",
+            "media": {
+                "type": "spi-nor",
+                "device_id": 0,
+            },
+        },
+        "updater": {
+            "psram": {
+                "file": "psram.bin",
+                "attr": ["required", "run"],
+                "ram": "0x30044000"
+            },
+            "spl_loader": {
+                "file": "bootloader.aic",
+                "attr": ["required", "run"],
+                "ram": "0x40100000"
+            },
+        },
+        "target": {
+            "spl": {
+                "file": "bootloader.aic",
+                "attr": ["mtd", "required"],
+                "part": ["spl"]
+            },
+            "env": {
+                "file": "env.bin",
+                "attr": ["mtd", "optional"],
+                "part": ["env"]
+            },
+            "env_r": {
+                "file": "env.bin",
+                "attr": ["mtd", "optional"],
+                "part": ["env_r"]
+            },
+            "os": {
+                "file": "os.aic",
+                "attr": ["mtd", "required"],
+                "part": ["os"]
+            },
+            "rodata": {
+                "file": "rodata.bin",
+                "attr": ["mtd", "optional"],
+                "part": ["rodata"]
+            },
+            "data": {
+                "file": "data.bin",
+                "attr": ["mtd", "optional"],
+                "part": ["data"]
+            },
+        },
+    },
+    "pre-process": {
+        "aicimage": {
+            "os.aic": {
+                "head_ver": "0x00010000",
+                "loader": {
+                    "file": "os.bin",
+                    "load address": "0x41000000",
+                    "entry point": "0x41000000"
+                },
+            },
+        },
+        "uboot_env": {
+            "env.bin": {
+                "file": "env.txt",
+                "size": "4096",
+                "redundant": "enable",
+            },
+        },
+    },
+}

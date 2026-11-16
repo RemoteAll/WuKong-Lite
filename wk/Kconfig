@@ -1,0 +1,55 @@
+#
+# WuKong-Lite 顶层 Kconfig（结构对齐 Luban-Lite）
+#
+mainmenu "WuKong-Lite Configuration"
+
+config PRJ_DEFCONFIG_FILENAME
+    string
+    default ""
+
+config PRJ_CHIP
+    string "SoC"
+    default "d13x"
+
+config PRJ_BOARD
+    string "Board"
+    default "demo88-nor"
+
+config PRJ_KERNEL
+    string "Kernel"
+    default "rt-thread"
+
+config PRJ_APP
+    string "Application"
+    default "helloworld"
+
+menu "Kernel"
+
+config KERNEL_RT_THREAD
+    bool "RT-Thread 5.x"
+    default y
+
+config KERNEL_BAREMETAL
+    bool "Baremetal"
+    default n
+
+config KERNEL_HEAP_SIZE
+    int "Kernel heap size"
+    default 1048576
+
+endmenu
+
+menu "Build options"
+
+config AIC_IMAGE_PACK
+    bool "Auto packing images after build"
+    default y
+
+config AIC_IMAGE_META_ALIGN
+    int "Component meta alignment"
+    default 512
+
+endmenu
+
+source "target/d13x/Kconfig.chip"
+source "target/d13x/demo88-nor/Kconfig.board"

@@ -1,0 +1,8 @@
+.zig-cache/
+zig-out/
+wk/config/.config
+wk/config/cconfig.h
+wk/config/build_info.json
+wk/image/*
+!wk/image/.gitkeep
+!wk/config/.gitkeep

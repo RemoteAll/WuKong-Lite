@@ -1,0 +1,62 @@
+#
+# d13x 芯片能力清单（对应 Luban-Lite `sys/<soc>/Kconfig.chip`）
+#
+menu "SoC d13x"
+
+config AIC_CHIP_D13X
+    bool "ArtInChip D13x"
+    default y
+
+config AIC_CHIP_FAMILY
+    string
+    default "artinchip-d13x"
+
+config AIC_CMU_DRV
+    bool "CMU (clock) driver"
+    default y
+
+config AIC_CMU_DRV_VER
+    string "CMU HAL version"
+    default "31"
+
+config AIC_GPIO_DRV
+    bool "GPIO driver"
+    default y
+
+config AIC_GPIO_DRV_VER
+    string
+    default "21"
+
+config AIC_UART_DRV
+    bool "UART driver"
+    default y
+
+config AIC_UART_DRV_VER
+    string
+    default "14"
+
+config AIC_MAILBOX_DRV
+    bool "Mailbox driver"
+    default y
+
+config AIC_MAILBOX_DRV_VER
+    string
+    default "11"
+
+config AIC_USING_UART0
+    bool "Enable UART0 (console)"
+    default y
+
+config AIC_USING_GPIO
+    bool "Enable GPIO"
+    default y
+
+config AIC_CONSOLE_DEVICE
+    string "Console device name"
+    default "uart0"
+
+config AIC_IRQ_STACK_SIZE
+    int "Interrupt stack size"
+    default 4096
+
+endmenu
