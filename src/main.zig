@@ -20,6 +20,8 @@ const crypt = aic.crypt;
 const fdt_reader = aic.fdt_reader;
 const fat = aic.fat;
 const rsa = aic.rsa;
+const sparse = aic.sparse;
+const cpio = aic.cpio;
 const fw_image = aic.fw_image;
 const image = aic.image;
 const env_image = aic.env_image;
@@ -135,6 +137,8 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image fat --input-dir <dir> --output <img> --size <bytes> [--sector 512] [--cluster 8] [--label NAME]
         \\  image rsasign --input <file> --key <priv.pem> [-o sig.bin]
         \\  image rsaverify --input <file> --key <pub.pem> --sig <sig.bin>
+        \\  image simg --input <raw> [--output <sparse>] [--block 4096] [--unsparse]
+        \\  image cpio --list <file> --input-dir <dir> -o <ota.cpio> [--format crc|newc] [--mtime 0]
         \\  image dump <file>
         \\
         \\  shell [-c "cmd"]            交互式 msh（uart0 / gpio0 模拟设备）
@@ -930,6 +934,88 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         const ok = try rsa.verifySha256(aa, &key, data, sig);
         try out.print("验签 {s}: {s}\n", .{ if (ok) "成功" else "失败", input });
         if (!ok) return error.SignatureMismatch;
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "simg")) {
+        const input = getOpt(rest, "--input") orelse return error.MissingArgument;
+        const data = try readBytes(io, aa, input);
+        defer aa.free(data);
+        const unsparse = hasFlag(rest, "--unsparse");
+
+        const result = if (unsparse)
+            try sparse.fromSparse(aa, data)
+        else blk: {
+            const block: u32 = if (getOpt(rest, "--block")) |v| @intCast(std.fmt.parseInt(usize, v, 0) catch return error.InvalidArgument) else 4096;
+            break :blk try sparse.toSparse(aa, data, block);
+        };
+        defer aa.free(result);
+
+        const out_path = getOpt(rest, "-o") orelse getOpt(rest, "--output") orelse blk: {
+            const base = std.fs.path.basename(input);
+            break :blk try std.fs.path.join(aa, &.{ IMAGE_DIR, try std.fmt.allocPrint(aa, "{s}.{s}", .{ base, if (unsparse) "raw" else "sparse" }) });
+        };
+        try ensureParentDir(io, out_path);
+        try writeBytes(io, out_path, result);
+        try out.print("simg: {s} -> {s}（{d} -> {d} bytes，{s}）\n", .{
+            input,
+            out_path,
+            data.len,
+            result.len,
+            if (unsparse) "sparse->raw" else "raw->sparse",
+        });
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "cpio")) {
+        const list_path = getOpt(rest, "--list") orelse return error.MissingArgument;
+        const output = getOpt(rest, "-o") orelse getOpt(rest, "--output") orelse return error.MissingArgument;
+        const input_dir = getOpt(rest, "--input-dir") orelse ".";
+        const format: cpio.Format = if (getOpt(rest, "--format")) |v|
+            (if (std.mem.eql(u8, v, "newc")) cpio.Format.newc else cpio.Format.crc)
+        else
+            cpio.Format.crc;
+        const mtime: u32 = if (getOpt(rest, "--mtime")) |v| @intCast(std.fmt.parseInt(u32, v, 0) catch return error.InvalidArgument) else 0;
+
+        const list = try readBytes(io, aa, list_path);
+        defer aa.free(list);
+
+        var entries: std.ArrayList(cpio.Entry) = .empty;
+        defer entries.deinit(aa);
+        var it = std.mem.splitScalar(u8, list, '\n');
+        while (it.next()) |raw_line| {
+            const line = std.mem.trim(u8, raw_line, " \t\r");
+            if (line.len == 0 or line[0] == '#') continue;
+            const is_dir_hint = std.mem.endsWith(u8, line, "/");
+            const name = std.mem.trimEnd(u8, line, "/");
+            const joined = try std.fs.path.join(aa, &.{ input_dir, name });
+            defer aa.free(joined);
+
+            const stat = std.Io.Dir.cwd().statFile(io, joined, .{}) catch |err| {
+                try out.print("跳过 {s}（{s}）\n", .{ name, @errorName(err) });
+                continue;
+            };
+            const is_dir = is_dir_hint or stat.kind == .directory;
+            const data = if (is_dir) "" else try readBytes(io, aa, joined);
+            defer if (!is_dir) aa.free(data);
+            try entries.append(aa, .{
+                .name = try aa.dupe(u8, name),
+                .data = if (is_dir) "" else try aa.dupe(u8, data),
+                .is_dir = is_dir,
+                .mtime = mtime,
+            });
+        }
+
+        const archive = try cpio.build(aa, entries.items, format);
+        defer aa.free(archive);
+        try ensureParentDir(io, output);
+        try writeBytes(io, output, archive);
+        try out.print("cpio: {s}（{d} entries，{d} bytes，{s}）\n", .{
+            output,
+            entries.items.len,
+            archive.len,
+            if (format == .crc) "crc" else "newc",
+        });
         return;
     }
 

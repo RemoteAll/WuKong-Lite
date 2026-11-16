@@ -74,6 +74,8 @@ pub const all = [_]Module{
             "src/tools/fdt_reader.zig",
             "src/tools/fat.zig",
             "src/tools/rsa.zig",
+            "src/tools/sparse.zig",
+            "src/tools/cpio.zig",
         },
     },
     .{

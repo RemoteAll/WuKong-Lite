@@ -57,6 +57,10 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
   （image_size/used_size + 校验和，对应 `makefatfs.py` 的离线烧写信息）。
 - **RSA 签名/验签**：`wk image rsasign/rsaverify` 实现 PKCS#1 v1.5 + SHA-256
   （PKCS#1/PKCS#8 私钥、SPKI/PKCS#1 公钥 PEM，2048/3072/4096 位）。
+- **Android sparse**：`wk image simg` 把 raw 镜像稀疏化（零块 FILL、其余 RAW、
+  尾部补零），`--unsparse` 可展开；与参考 `img2simg.exe` 输出**逐字节一致**。
+- **cpio 归档**：`wk image cpio` 按文件清单生成 `newc`/`crc` 归档（名字/数据 4 字节对齐、
+  `TRAILER!!!`、512 对齐），对应 `mkcpio.py` 里 `cpio -ov -H crc` 的 OTA 子镜像。
 - **ELF 工具**：`wk image elf2aic`（按 PT_LOAD 展开为 AIC 可启动镜像）、
   `wk image elf2its`（按参考 `elf2image` 规则提取 `segN.bin` 并生成 ITS，XIP 段序交换）。
 
@@ -66,8 +70,9 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
 - ITS 中的 `signature*` / `cipher` 节点（解析到即报错，不做签名/加密）；
 - 真实 SoC 的寄存器级 HAL、启动汇编、链接脚本与交叉编译到 RISC-V；
 - RT-Thread/FreeRTOS/uCOS 内核本体、LVGL、lwIP、mbedTLS 等第三方包；
-- FAT32 与 `img2simg` 稀疏化、`makefatfs.py` 的 `--auto/--fullpart` 自动尺寸；
-- `mklittlefs` / `mkuffs` 文件系统镜像工具。
+- FAT32 与 `makefatfs.py` 的 `--auto/--fullpart` 自动尺寸；
+- `mklittlefs` / `mkuffs` 文件系统镜像工具；
+- cpio 的 ino/dev/uid/gid 跟随宿主机（参考 cpio.exe 也如此），因此不保证跨机字节一致。
 
 遇到未实现的配置（如 `sign` / `encrypt`）会明确报错，不会静默生成坏镜像。
 
@@ -100,6 +105,8 @@ zig-out\bin\wk.exe image fitinfo --input os.itb --verify
 zig-out\bin\wk.exe image fat --input-dir rootfs --output data.img --size 8M --cluster 4 --label WKROOT
 zig-out\bin\wk.exe image rsasign --input os.bin --key rsa2048.pem -o os.sig
 zig-out\bin\wk.exe image rsaverify --input os.bin --key rsa2048_pub.pem --sig os.sig
+zig-out\bin\wk.exe image simg --input data.img --output data.img.sparse --block 4096
+zig-out\bin\wk.exe image cpio --list ota-list.txt --input-dir out --output ota.cpio
 zig-out\bin\wk.exe image env --config wk/target/d13x/demo88-nor/pack/image_cfg.json -o env.bin
 zig-out\bin\wk.exe run hello
 zig-out\bin\wk.exe shell
@@ -138,6 +145,10 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
 - `wk image rsasign` 对 1 MiB 数据 + 2048 位密钥的输出与 `openssl dgst -sha256 -sign`
   **逐字节相同**；`openssl dgst -verify` 能验过我们的签名，我们的 `rsaverify` 也能验过
   openssl 签名；篡改 1 字节后验签失败且退出码 1。
+- `wk image simg` 与参考 `img2simg.exe` 在 11 组边界样本（全零/重复非零/交织/不足一块）
+  及 1 MiB FAT 镜像上输出**逐字节完全一致**（block=1024）。
+- `wk image cpio` 生成的归档能直接被参考 `cpio.exe -idm` 解开（文件与目录内容一致）；
+  与参考归档做“归一化头字段”后比较，名字顺序/数据/校验和/对齐**完全一致**。
 - 小样本回归向量（`a=b`、`-r -s 64`）已写入单元测试：`6D9AECC2 01 61 3D 62 00 00 FF...`。
 
 ## 测试覆盖
@@ -160,11 +171,12 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
 - ITS 解析（C 风格注释、`<0x..>` 单元表达式、`&label` 引用、重复标签、错误位置）与 hash 节点回填；
 - AES-128-CBC 加/解密往返、长度对齐错误、`zero`/`pkcs7` 补位；
 - FAT12/FAT16 选择、卷标/短名/LFN 目录项、`AICF` 信息块与校验和；
-- RSA PKCS#1 v1.5 SHA-256：openssl 生成的 512 位向量逐字节比对、验签与篡改拒绝。
+- RSA PKCS#1 v1.5 SHA-256：openssl 生成的 512 位向量逐字节比对、验签与篡改拒绝；
+- sparse 头字段/零块 FILL/尾部补齐与往返、cpio crc 校验和与解析往返。
 
 ## 继续开发建议
 
 1. SM2 签名、RSA-PSS、加密私钥，以及把 RSA 签名接入 ITS `signature` 节点与 AIC 头区间；
 2. 增加 `src/bsp/artinchip/hal/*` 的寄存器模型与 `sys/d33x` 启动流程；
 3. 把 `build.zig` 接入 `.config`（按开关选择模块编译，等价 `SConscript` 的 `GetDepend`）；
-4. 补 FAT32 与 `img2simg` 稀疏化，以及 `mklittlefs` / `mkuffs` 镜像工具。
+4. 补 FAT32 与 `makefatfs.py` 的 `--auto/--fullpart`，以及 `mklittlefs` / `mkuffs` 镜像工具。
