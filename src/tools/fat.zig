@@ -343,6 +343,43 @@ pub const Builder = struct {
         return (chars + 12) / 13;
     }
 
+    fn estimateDataBytes(node: *const Node, cluster: usize, is_root: bool) usize {
+        var total: usize = if (is_root) 0 else cluster; // 每个目录至少一个簇
+        for (node.children.items) |c| {
+            if (c.is_dir) {
+                total += estimateDataBytes(c, cluster, false);
+            } else {
+                total += std.mem.alignForward(usize, c.data.len, cluster);
+            }
+        }
+        return total;
+    }
+
+    /// 等价 `makefatfs.py --auto` 的镜像尺寸估算：
+    /// data = Σ files(按簇对齐) + Σ dirs(每目录 1 簇)，再按簇对齐；
+    /// FAT 大小按估算簇数选择 12/16 位，元数据 = 1 保留扇区 + 2×FAT + 512 根目录项；
+    /// 总长按簇对齐，且不小于 128 个扇区（与参考实测 65536 一致）。
+    pub fn autoTotalBytes(self: *Builder) Error!usize {
+        const sector: usize = self.opts.sector_size;
+        if (sector != 512 and sector != 1024 and sector != 2048 and sector != 4096) return Error.BadSectorSize;
+        if (self.opts.cluster_sectors == 0 or !std.math.isPowerOfTwo(self.opts.cluster_sectors)) return Error.BadClusterSize;
+        const cluster: usize = sector * self.opts.cluster_sectors;
+
+        var data_bytes = estimateDataBytes(self.root, cluster, true);
+        data_bytes = std.mem.alignForward(usize, data_bytes, cluster);
+        const clusters_est = data_bytes / cluster;
+        const bits: usize = if (clusters_est < 4085) 12 else 16;
+        if (clusters_est >= 65525) return Error.Fat32Required;
+
+        const fat_bytes = (clusters_est + 2) * bits / 8;
+        const root_dir_sectors = (512 * 32 + sector - 1) / sector;
+        var total = sector + 2 * std.mem.alignForward(usize, fat_bytes, sector) + root_dir_sectors * sector + data_bytes;
+        total = std.mem.alignForward(usize, total, cluster);
+        const min_total = 128 * sector;
+        if (total < min_total) total = min_total;
+        return total;
+    }
+
     fn dirEntryBytes(dir: *Node, is_root: bool) usize {
         var entries: usize = if (is_root) 1 else 2; // 卷标 / "." ".."
         for (dir.children.items) |c| {
@@ -700,10 +737,10 @@ pub const Builder = struct {
     fn writeAicInfo(self: *Builder, img: []u8, l: Layout) void {
         if (img.len < 0x80 + 40) return;
         const used_bytes: u64 = minimalUsedBytes(self, l);
-        const info = img[0x80..0x80 + 40];
+        const info = img[0x80 .. 0x80 + 40];
         @memset(info, 0);
         @memcpy(info[0..4], "AICF");
-        std.mem.writeInt(u32, info[8..12], 32, .little);
+        std.mem.writeInt(u32, info[8..12], 40, .little);
         std.mem.writeInt(u32, info[12..16], 0x0101, .little);
         std.mem.writeInt(u64, info[16..24], @intCast(l.total_sectors * l.sector_size), .little);
         std.mem.writeInt(u64, info[24..32], used_bytes, .little);
@@ -716,22 +753,39 @@ pub const Builder = struct {
     }
 };
 
-fn totalUsedClusters(dir: *const Node) u64 {
+fn clustersOfFile(len: usize, cluster: usize) u64 {
+    if (len == 0) return 0;
+    return @intCast((len + cluster - 1) / cluster);
+}
+
+fn allocatedClusters(dir: *const Node, cluster: usize) u64 {
     var n: u64 = 0;
+    const bytes = dirEntryBytesForUsed(dir);
+    n += @intCast((bytes + cluster - 1) / cluster);
     for (dir.children.items) |c| {
         if (c.is_dir) {
-            n += 1 + totalUsedClusters(c);
-        } else if (c.data.len > 0) {
-            n += 1;
+            n += allocatedClusters(c, cluster);
+        } else {
+            n += clustersOfFile(c.data.len, cluster);
         }
     }
     return n;
 }
 
+fn dirEntryBytesForUsed(dir: *const Node) usize {
+    // 每个子项 1 个 SFN 项（LFN 另计）；非根目录还有 "." 和 ".."
+    var entries: usize = if (dir.parent == null) 1 else 2;
+    for (dir.children.items) |c| {
+        const chars = std.unicode.utf8CountCodepoints(c.name) catch c.name.len;
+        entries += 1 + (if (c.needs_lfn) (chars + 12) / 13 else 0);
+    }
+    return entries * 32;
+}
+
 fn minimalUsedBytes(self: *Builder, l: Builder.Layout) u64 {
     const meta = (l.reserved_sectors + l.num_fats * l.fat_sectors + l.root_dir_sectors) * l.sector_size;
-    const data_clusters = 1 + totalUsedClusters(self.root) + 2;
-    return @as(u64, meta) + @as(u64, data_clusters) * l.cluster_bytes;
+    const data_clusters = allocatedClusters(self.root, l.cluster_bytes);
+    return @as(u64, meta) + data_clusters * l.cluster_bytes;
 }
 
 // ---------------------------------------------------------------------------
@@ -791,7 +845,22 @@ test "FAT16 选择与容量检查" {
     try std.testing.expectEqualStrings("FAT16   ", img[54..62]);
 }
 
-
-
-
-
+test "--auto 尺寸：与参考 makefatfs.py -a 一致" {
+    const allocator = std.testing.allocator;
+    var b = try Builder.init(allocator, .{
+        .total_bytes = 0,
+        .cluster_sectors = 4,
+        .volume_label = "WKROOT",
+    });
+    defer b.deinit();
+    try b.addFile("hello.txt", "hello fat\n");
+    const zeros = try allocator.alloc(u8, 5120);
+    defer allocator.free(zeros);
+    @memset(zeros, 0);
+    try b.addFile("a-long-file-name.dat", zeros);
+    try b.addFile("sub/dir file.txt", "nested file\n");
+    try b.addDir("empty");
+    const total = try b.autoTotalBytes();
+    // 参考 makefatfs.py -a 在同一目录/参数下产出 65536
+    try std.testing.expectEqual(@as(usize, 65536), total);
+}

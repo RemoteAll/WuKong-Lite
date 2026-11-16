@@ -135,6 +135,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image crypt --input <bin> --key <32hex> --iv <32hex> [--decrypt] [--pad zero|pkcs7] [-o out.bin]
         \\  image fitinfo --input <itb> [--dump] [--verify]
         \\  image fat --input-dir <dir> --output <img> --size <bytes> [--sector 512] [--cluster 8] [--label NAME]
+        \\          （--auto 可省略 --size，按内容估算，等价 makefatfs.py -a）
         \\  image rsasign --input <file> --key <priv.pem> [-o sig.bin]
         \\  image rsaverify --input <file> --key <pub.pem> --sig <sig.bin>
         \\  image simg --input <raw> [--output <sparse>] [--block 4096] [--unsparse]
@@ -850,7 +851,8 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
     if (std.mem.eql(u8, sub, "fat")) {
         const input_dir = getOpt(rest, "--input-dir") orelse return error.MissingArgument;
         const output = getOpt(rest, "--output") orelse getOpt(rest, "-o") orelse return error.MissingArgument;
-        const size_text = getOpt(rest, "--size") orelse return error.MissingArgument;
+        const auto = hasFlag(rest, "--auto");
+        const size_text = getOpt(rest, "--size") orelse (if (auto) "0" else return error.MissingArgument);
         const total_bytes = aic.utils.sizeStrToInt(size_text) catch return error.InvalidArgument;
         const sector: u16 = if (getOpt(rest, "--sector")) |v| @intCast(std.fmt.parseInt(usize, v, 0) catch return error.InvalidArgument) else 512;
         const cluster: u8 = if (getOpt(rest, "--cluster")) |v| @intCast(std.fmt.parseInt(usize, v, 0) catch return error.InvalidArgument) else 8;
@@ -868,6 +870,10 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
             try out.print("读取目录失败（{s}）：{s}\n", .{ input_dir, @errorName(err) });
             return;
         };
+
+        if (auto) {
+            builder.opts.total_bytes = try builder.autoTotalBytes();
+        }
         const img = try builder.build();
         defer aa.free(img);
 

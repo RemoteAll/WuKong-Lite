@@ -53,8 +53,8 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
 - **镜像加密**：`wk image crypt` 提供 AES-128-CBC 加/解密（`--pad none|zero|pkcs7`），
   与参考 `openssl enc -aes-128-cbc -nopad` 逐字节一致。
 - **FAT 镜像构建**：`wk image fat` 生成 FAT12/FAT16 数据分区镜像（LFN 长文件名、
-  8.3 短名去重、卷标、`FAT 时间戳`），并在 0x80 写入 AIC 扩展信息块 `AICF`
-  （image_size/used_size + 校验和，对应 `makefatfs.py` 的离线烧写信息）。
+  8.3 短名去重、卷标、`FAT 时间戳`），`--auto` 按内容估算尺寸（等价 `makefatfs.py -a`），
+  并在 0x80 写入 40 字节 AIC 扩展信息块 `AICF`（image_size/used_size + 校验和）。
 - **RSA 签名/验签**：`wk image rsasign/rsaverify` 实现 PKCS#1 v1.5 + SHA-256
   （PKCS#1/PKCS#8 私钥、SPKI/PKCS#1 公钥 PEM，2048/3072/4096 位）。
 - **Android sparse**：`wk image simg` 把 raw 镜像稀疏化（零块 FILL、其余 RAW、
@@ -70,7 +70,9 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
 - ITS 中的 `signature*` / `cipher` 节点（解析到即报错，不做签名/加密）；
 - 真实 SoC 的寄存器级 HAL、启动汇编、链接脚本与交叉编译到 RISC-V；
 - RT-Thread/FreeRTOS/uCOS 内核本体、LVGL、lwIP、mbedTLS 等第三方包；
-- FAT32 与 `makefatfs.py` 的 `--auto/--fullpart` 自动尺寸；
+- FAT32 与 `makefatfs.py --fullpart`（按分区大小取整）；
+- `fatupdate.exe` 追加的 AICF `dirent_sect_id/dirent_data_len` 列表（NFTL 离线烧录用），
+  我们写 0，`used_size` 按“元数据 + 实际分配簇”计算，与参考工具口径不同；
 - `mklittlefs` / `mkuffs` 文件系统镜像工具；
 - cpio 的 ino/dev/uid/gid 跟随宿主机（参考 cpio.exe 也如此），因此不保证跨机字节一致。
 
@@ -103,6 +105,7 @@ zig-out\bin\wk.exe image itb --its app_os.its -o os.itb
 zig-out\bin\wk.exe image crypt --input kernel.bin --key 000102030405060708090a0b0c0d0e0f --iv 101112131415161718191a1b1c1d1e1f --pad zero
 zig-out\bin\wk.exe image fitinfo --input os.itb --verify
 zig-out\bin\wk.exe image fat --input-dir rootfs --output data.img --size 8M --cluster 4 --label WKROOT
+zig-out\bin\wk.exe image fat --input-dir rootfs --output data.img --auto --cluster 4 --label WKROOT
 zig-out\bin\wk.exe image rsasign --input os.bin --key rsa2048.pem -o os.sig
 zig-out\bin\wk.exe image rsaverify --input os.bin --key rsa2048_pub.pem --sig os.sig
 zig-out\bin\wk.exe image simg --input data.img --output data.img.sparse --block 4096
@@ -142,6 +145,8 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
   改动 `data` 中一个字节后 **failed=2 且退出码 1**。
 - `wk image fat` 生成的镜像用参考 `mcopy.exe` 递归拷回：**文件名（含 LFN）、目录结构、
   空目录、文件 SHA256 与源目录完全一致**（FAT12、512B 扇区、2 KiB 簇、卷标 WKROOT）。
+- `wk image fat --auto` 对同一 rootfs 的总长与 `makefatfs.py -a` **同为 65536**，内容回读一致；
+  `AICF` 头长度 40 与参考 `fatupdate.exe` 终态一致（其 dirent 列表与 used_size 口径未复刻，已注明）。
 - `wk image rsasign` 对 1 MiB 数据 + 2048 位密钥的输出与 `openssl dgst -sha256 -sign`
   **逐字节相同**；`openssl dgst -verify` 能验过我们的签名，我们的 `rsaverify` 也能验过
   openssl 签名；篡改 1 字节后验签失败且退出码 1。
@@ -171,6 +176,7 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
 - ITS 解析（C 风格注释、`<0x..>` 单元表达式、`&label` 引用、重复标签、错误位置）与 hash 节点回填；
 - AES-128-CBC 加/解密往返、长度对齐错误、`zero`/`pkcs7` 补位；
 - FAT12/FAT16 选择、卷标/短名/LFN 目录项、`AICF` 信息块与校验和；
+- FAT `--auto` 尺寸（与参考 65536 基线一致）；
 - RSA PKCS#1 v1.5 SHA-256：openssl 生成的 512 位向量逐字节比对、验签与篡改拒绝；
 - sparse 头字段/零块 FILL/尾部补齐与往返、cpio crc 校验和与解析往返。
 
@@ -179,4 +185,4 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
 1. SM2 签名、RSA-PSS、加密私钥，以及把 RSA 签名接入 ITS `signature` 节点与 AIC 头区间；
 2. 增加 `src/bsp/artinchip/hal/*` 的寄存器模型与 `sys/d33x` 启动流程；
 3. 把 `build.zig` 接入 `.config`（按开关选择模块编译，等价 `SConscript` 的 `GetDepend`）；
-4. 补 FAT32 与 `makefatfs.py` 的 `--auto/--fullpart`，以及 `mklittlefs` / `mkuffs` 镜像工具。
+4. 补 FAT32、`makefatfs.py --fullpart` 与 AICF dirent 列表，以及 `mklittlefs` / `mkuffs` 镜像工具。

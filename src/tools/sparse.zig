@@ -63,7 +63,7 @@ fn blockIsZero(block: []const u8) bool {
 
 fn appendChunkHeader(out: *std.ArrayList(u8), a: std.mem.Allocator, typ: ChunkType, blocks: u32, total_bytes: u32) !void {
     var buf: [CHUNK_HEADER_SIZE]u8 = undefined;
-    std.mem.writeInt(u16, buf[0..2], @intFromEnum(typ), .little);
+    std.mem.writeInt(u16, buf[0..2], @backingInt(typ), .little);
     std.mem.writeInt(u16, buf[2..4], 0, .little);
     std.mem.writeInt(u32, buf[4..8], blocks, .little);
     std.mem.writeInt(u32, buf[8..12], total_bytes, .little);
@@ -164,13 +164,13 @@ pub fn fromSparse(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
         if (pos + payload > data.len) return Error.Truncated;
 
         switch (typ) {
-            @intFromEnum(ChunkType.raw) => {
+            @backingInt(ChunkType.raw) => {
                 const bytes = count * header.block_size;
                 if (block + count > header.total_blocks or payload < bytes) return Error.BadChunk;
                 @memcpy(out[block * header.block_size ..][0..bytes], data[pos..][0..bytes]);
                 block += count;
             },
-            @intFromEnum(ChunkType.fill) => {
+            @backingInt(ChunkType.fill) => {
                 if (payload < 4 or block + count > header.total_blocks) return Error.BadChunk;
                 const value: [4]u8 = data[pos..][0..4].*;
                 var k: usize = 0;
@@ -183,11 +183,11 @@ pub fn fromSparse(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
                 }
                 block += count;
             },
-            @intFromEnum(ChunkType.dont_care) => {
+            @backingInt(ChunkType.dont_care) => {
                 if (block + count > header.total_blocks) return Error.BadChunk;
                 block += count;
             },
-            @intFromEnum(ChunkType.crc32) => {},
+            @backingInt(ChunkType.crc32) => {},
             else => return Error.BadChunk,
         }
         pos += payload;
@@ -239,5 +239,3 @@ test "sparse：坏 magic" {
     var buf: [28]u8 = @splat(0);
     try std.testing.expectError(error.BadMagic, readHeader(&buf));
 }
-
-

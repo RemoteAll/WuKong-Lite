@@ -57,7 +57,7 @@
 | `its.zig` | `mkimage -f`（`image-host/libfdt`） | `.its` 源码解析（C 风格注释/`<expr>`/节点引用），hash 节点自动填充，timestamp 置根首 |
 | `elf2aic.zig` | `elf2image` + AIC 头 | ELF32/64 段解析、AIC 展开、ITS 段提取 |
 | `crypt.zig` | `firmware_security_encrypt`（AES 部分） | AES-128-CBC 加/解密、hex 密钥解析、none/zero/pkcs7 补位 |
-| `fat.zig` | `makefatfs.py`（mformat + mcopy + AICF） | FAT12/16 镜像、LFN/8.3 目录项、卷标、`AICF` 信息块 |
+| `fat.zig` | `makefatfs.py`（mformat + mcopy + AICF） | FAT12/16 镜像、LFN/8.3 目录项、卷标、`--auto` 尺寸、`AICF` 信息块 |
 | `rsa.zig` | `mk_image.py` 的 PKCS1_v1_5 + U-Boot bootm | PEM/DER 解析、PKCS#1 v1.5 SHA-256 签名/验签 |
 | `sparse.zig` | `img2simg` / `simg2img` | Android sparse（零块 FILL、其余 RAW、尾部补齐） |
 | `cpio.zig` | `mkcpio.py`（`cpio -ov -H crc`） | newc/crc 归档、4 字节对齐、TRAILER、512 对齐 |
@@ -137,7 +137,8 @@ FAT12 项：entry0 = 0xFF8、entry1 = 0xFFF；FAT16：0xFFF8 / 0xFFFF
 - **镜像加密**：`wk image crypt --input app.bin --key <32hex> --iv <32hex> [--pad zero]`，
   与 `openssl enc -aes-128-cbc -nopad` 逐字节一致；解密加 `--decrypt`。
 - **FAT 数据分区**：`wk image fat --input-dir rootfs --output data.img --size 8M
-  [--sector 512] [--cluster 4] [--label WKROOT]`；可用参考 `mcopy.exe -i data.img -s ::/ dir` 回读校验。
+  [--sector 512] [--cluster 4] [--label WKROOT]`，`--auto` 可省 `--size`（等价 makefatfs -a）；
+  可用参考 `mcopy.exe -i data.img -s ::/ dir` 回读校验。
 - **RSA 签名**：`wk image rsasign --input os.bin --key rsa2048.pem [-o os.sig]`，
   `wk image rsaverify --input os.bin --key rsa2048_pub.pem --sig os.sig`；与
   `openssl dgst -sha256 -sign/-verify` 逐字节互通。

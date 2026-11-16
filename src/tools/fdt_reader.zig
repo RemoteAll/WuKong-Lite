@@ -113,10 +113,10 @@ pub fn parse(allocator: std.mem.Allocator, blob: []const u8) !Tree {
     while (pos + 4 <= struct_end) {
         const tok_raw = try readBe32(blob, pos);
         pos += 4;
-        if (tok_raw == @intFromEnum(Token.nop)) continue;
-        if (tok_raw == @intFromEnum(Token.end)) break;
+        if (tok_raw == @backingInt(Token.nop)) continue;
+        if (tok_raw == @backingInt(Token.end)) break;
 
-        if (tok_raw == @intFromEnum(Token.begin_node)) {
+        if (tok_raw == @backingInt(Token.begin_node)) {
             const name_start = pos;
             const name_len = std.mem.findScalar(u8, blob[name_start..struct_end], 0) orelse return error.BadName;
             const name = blob[name_start .. name_start + name_len];
@@ -131,10 +131,10 @@ pub fn parse(allocator: std.mem.Allocator, blob: []const u8) !Tree {
                 try stack.items[stack.items.len - 1].children.append(a, node);
             }
             try stack.append(a, node);
-        } else if (tok_raw == @intFromEnum(Token.end_node)) {
+        } else if (tok_raw == @backingInt(Token.end_node)) {
             if (stack.items.len == 0) return error.UnexpectedEnd;
             _ = stack.pop();
-        } else if (tok_raw == @intFromEnum(Token.prop)) {
+        } else if (tok_raw == @backingInt(Token.prop)) {
             if (stack.items.len == 0) return error.BadProp;
             const len = try readBe32(blob, pos);
             const name_off = try readBe32(blob, pos + 4);
