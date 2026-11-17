@@ -1,0 +1,69 @@
+﻿{
+    "repository":  "https://github.com/artinchip/luban-lite",
+    "source_path":  "G:\\Code\\C\\luban-lite",
+    "branch":  "master",
+    "commit":  "c6e3a4771a483fc4b42519b2882be3a21a50ef61",
+    "github_head":  null,
+    "synced_at":  "2026-11-17T08:18:30+08:00",
+    "scope":  [
+                  "doc/skills/**",
+                  "doc/license-3rd-party.txt"
+              ],
+    "excluded":  [
+                     "doc/topics/**",
+                     "doc/images/**",
+                     "doc/webhelp/**"
+                 ],
+    "files":  [
+                  {
+                      "path":  "skills/aiburn/README.md",
+                      "size":  3102,
+                      "sha256":  "3eb5847baac8ae9d2555fd20e926e500e4ea0cc4ce84d2378ba7cd0cb2ec5536"
+                  },
+                  {
+                      "path":  "skills/aiburn/SKILL.md",
+                      "size":  8646,
+                      "sha256":  "77aeb4d5ea3fac26d43e151f8a70b8eb590425741fcae5213fadc58d863d1208"
+                  },
+                  {
+                      "path":  "skills/aiburn/scripts/aiburn.py",
+                      "size":  12229,
+                      "sha256":  "567a94fd8f9c88935b51ae7fb482f92a831d82b6e9f7da4aedbbc473d3a59e09"
+                  },
+                  {
+                      "path":  "skills/aiburn/scripts/README.md",
+                      "size":  2697,
+                      "sha256":  "538765678babade4e18b97f63c1a7f8374e3da8304adc196f6a0cecef88475b2"
+                  },
+                  {
+                      "path":  "skills/aiburn/scripts/aiburn/aicupg_client.py",
+                      "size":  38794,
+                      "sha256":  "5f8fcd75b6976f8bca4beff654fdcfe91b0d679c45688f2853b0f13331bdf06e"
+                  },
+                  {
+                      "path":  "skills/aiburn/scripts/aiburn/env_detector.py",
+                      "size":  4443,
+                      "sha256":  "e9ae918ecab0a3a83eafe7f7f2a25a9e97e32c7c5491ee7c4436da1337e1e123"
+                  },
+                  {
+                      "path":  "skills/aiburn/scripts/aiburn/skill_burn.py",
+                      "size":  25134,
+                      "sha256":  "07d3e809fa91d053226734e6afc6fdb713537bb1e049b66e5ea4a7f43945166e"
+                  },
+                  {
+                      "path":  "skills/aiburn/scripts/aiburn/skill_verify_nand.py",
+                      "size":  20760,
+                      "sha256":  "daf12a5d1c7c6dc39b55d916fda8cadddde19e948d10afaa8d5d5b0224cff0f1"
+                  },
+                  {
+                      "path":  "skills/aiburn/scripts/aiburn/__init__.py",
+                      "size":  903,
+                      "sha256":  "2b945af11e3d1fec65baa9892b195aafe84b0ab21cc00e7a6e67d4018fbed7d3"
+                  },
+                  {
+                      "path":  "LICENSE-3rd-party.txt",
+                      "size":  33171,
+                      "sha256":  "9347cbd2b3c5b4ecea7977376e67af6b6e2214728bdb4c1ab3831c65325ef3f4"
+                  }
+              ]
+}

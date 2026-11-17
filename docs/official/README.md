@@ -3,6 +3,9 @@
 本目录原样迁移自参考工程 `G:\Code\C\luban-lite\doc`（ArtInChip Luban-Lite），
 保留原始内容与许可证，便于离线查阅与工具复用。
 
+> **不要手工编辑 `skills/` 与 `LICENSE-3rd-party.txt`**：它们由 `tools/sync-upstream.ps1`
+> 从官方 SDK 同步，版本记录见 `docs/official/UPSTREAM.json`，流程见 `docs/official/UPSTREAM.md`。
+
 ## 已迁移
 
 | 路径 | 源路径 | 说明 |
