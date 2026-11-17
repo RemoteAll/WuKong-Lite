@@ -90,6 +90,53 @@ $gcc = "<toolchain>\bin\riscv64-unknown-elf-gcc.exe"
 - 与 C 混编时保持 `ilp32d`，否则浮点参数 ABI 不一致会出错；
 - RT-Thread 的上下文切换、异常入口仍应由 C/汇编负责，Zig 只写业务逻辑。
 
+### 已在 WuKong-Lite 内跑通的裸机示例：`apps/hello_uart`
+
+目录：
+
+```
+apps/hello_uart/
+├── main.zig   # _start（设 sp）+ zig_main（轮询 LSR 写 UART0 THR）
+└── link.ld    # . = 0x41000000，__stack_top = 0x41080000
+```
+
+构建（自动找 `wk\image\xuantie\...\riscv64-unknown-elf-gcc.exe`）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\build-zig-app.ps1 -App hello_uart
+```
+
+产物（`wk\image\apps\`）：
+
+| 文件 | 说明 |
+|------|------|
+| `hello_uart.o` | Zig 目标文件（rv32imafdc/ilp32d） |
+| `hello_uart.elf` | 与官方 GCC 链接，`entry=0x41000000`，`zig_main@0x41000010` |
+| `hello_uart.aic` | `wk image elf2aic` 生成，checksum OK，load/entry=0x41000000 |
+| `hello_uart.bin` | `objcopy -O binary`，供 upgcmd 直接写到 RAM |
+| `hello_uart.map` | 链接映射 |
+
+直接跑到 RAM（设备已进 USB/UART 升级模式）：
+
+```powershell
+upgcmd.exe write 0x41000000 wk\image\apps\hello_uart.bin
+upgcmd.exe exec  0x41000000
+```
+
+串口应输出：
+
+```
+[WuKong-Lite] hello from Zig bare-metal on D13x
+UART0 @ 0x18710000, entry 0x41000000
+```
+
+前提与风险：
+
+- UART0 基址取自 SDK：`0x18710000`，THR=0x00、LSR=0x14（THRE=bit5）；
+- 假定 bootloader 已配置好 UART0 的时钟与引脚复用；否则串口无输出；
+- 若作为 `os` 分区镜像，FIT/AIC 的 load/entry 必须与 `0x41000000` 一致；
+- 该示例不初始化时钟/DDR/中断，只用于 bring-up 验证。
+
 ## 限制与坑
 
 - **ISA 扩展**：D13x 带 T-Head 私有扩展（`xtheade`、`zpsfoperand`）；

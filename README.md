@@ -69,6 +69,9 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
 - **Zig 开发支持**：`docs/ZIG_ON_LUBAN_LITE.md` 记录 Zig 目标参数
   （`riscv32-freestanding-none -mcpu=generic_rv32+d+f+c+a+m`，对应 D13x `rv32imafdc/ilp32d`）
   与官方 Xuantie GCC 混链验证；示例在 `examples/zig_riscv/`。
+- **Zig 裸机应用**：`apps/hello_uart/` + `tools/build-zig-app.ps1`，
+  一键产出 `.o/.elf/.aic/.bin`（entry 0x41000000，UART0 轮询输出），
+  可用 `upgcmd write/exec` 直接跑到 RAM。
 - **ELF 工具**：`wk image elf2aic`（按 PT_LOAD 展开为 AIC 可启动镜像）、
   `wk image elf2its`（按参考 `elf2image` 规则提取 `segN.bin` 并生成 ITS，XIP 段序交换）。
 
