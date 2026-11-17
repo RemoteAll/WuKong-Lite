@@ -43,7 +43,7 @@
 
 | 官方 | 已做 | 缺口 |
 |------|------|------|
-| `makefatfs.py` | FAT12/16、LFN、`--auto` 尺寸 | FAT32、`--fullpart`、AICF `dirent_*` 列表、`fatupdate` 的 used_size 口径 |
+| `makefatfs.py` | FAT12/16/32、LFN、`--auto` 尺寸、FAT32 FSInfo/备份引导 | `--fullpart`、AICF `dirent_*` 列表、`fatupdate` 的 used_size 口径 |
 | `mkimage` 签名/加密 | 独立 RSA/AES 工具 | ITS `signature*`/`cipher` 节点、AIC 头 `sign_algo/encrypt_algo`/iv 区间联动 |
 | `aic_build.py` | Kconfig→build_plan→codegen | SCons 全量构建、链接脚本/工具链选择、镜像后处理流水线 |
 | 官方文档 | aiburn 技能 | `topics/` 464 篇、`images/`、`webhelp/` 未迁（体积原因，可按需） |

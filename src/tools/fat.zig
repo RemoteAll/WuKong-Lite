@@ -1,9 +1,10 @@
-﻿//! FAT12/FAT16 镜像构建器 —— 对应参考工程
+﻿//! FAT12/FAT16/FAT32 镜像构建器 —— 对应参考工程
 //! `tools/scripts/makefatfs.py`（mformat + mcopy + AICF 信息块）。
 //!
 //! 支持：
 //!   * 目录树、LFN 长文件名（UTF-16LE）、8.3 短名与 `~N` 去重；
-//!   * FAT12 / FAT16 自动选择（FAT32 暂不支持，明确报错）；
+//!   * FAT12 / FAT16 自动选择（簇数 >= 65525 自动 FAT32；`fat32` 可强制）；
+//!   * FAT32 BPB、FSInfo、备份引导扇区与根目录簇；
 //!   * 卷标、固定时间戳（默认 2020-01-01）；
 //!   * AIC 扩展信息块 `AICF`（偏移 0x80，含 image_size/used_size 与校验和）。
 //!
@@ -29,6 +30,8 @@ pub const Options = struct {
     volume_id: u32 = 0x574b4c54, // "WKLT"
     /// FAT 时间戳（Unix 秒）；0 = 2020-01-01 00:00:00
     mtime: u32 = 0,
+    /// 强制 FAT32（参考 mformat 在簇数 >= 65525 时自动选择 FAT32）。
+    fat32: bool = false,
 };
 
 const DateTime = struct { date: u16, time: u16 };
@@ -290,6 +293,9 @@ pub const Builder = struct {
         fat_bits: u8,
         data_start_sector: usize,
         total_clusters: usize,
+        root_cluster: u32 = 0,
+        fsinfo_sector: usize = 1,
+        backup_boot_sector: usize = 6,
     };
 
     fn layoutFor(opts: Options) Error!Layout {
@@ -300,28 +306,40 @@ pub const Builder = struct {
         if (opts.total_bytes < cluster_bytes * 8) return Error.TooSmall;
 
         const total_sectors = opts.total_bytes / sector_size;
-        const root_entries: usize = 512;
-        const root_dir_sectors = (root_entries * 32 + sector_size - 1) / sector_size;
 
-        var fat_bits: u8 = 12;
+        var fat_bits: u8 = if (opts.fat32) 32 else 12;
+        var reserved_sectors: usize = if (fat_bits == 32) 32 else 1;
+        var root_entries: usize = if (fat_bits == 32) 0 else 512;
+        var root_dir_sectors: usize = (root_entries * 32 + sector_size - 1) / sector_size;
         var fat_sectors: usize = 1;
         var total_clusters: usize = 0;
+
         var round: usize = 0;
-        while (round < 8) : (round += 1) {
-            const data_sectors = total_sectors -| (1 + 2 * fat_sectors + root_dir_sectors);
+        while (round < 12) : (round += 1) {
+            const data_sectors = total_sectors -| (reserved_sectors + 2 * fat_sectors + root_dir_sectors);
             total_clusters = data_sectors / opts.cluster_sectors;
-            if (fat_bits == 12 and total_clusters >= 4085) {
+
+            if (!opts.fat32 and fat_bits == 12 and total_clusters >= 4085) {
                 fat_bits = 16;
                 fat_sectors = 1;
                 continue;
             }
-            if (fat_bits == 16 and total_clusters >= 65525) return Error.Fat32Required;
-            const fat_bytes = ((total_clusters + 2) * fat_bits + 7) / 8;
+            if (!opts.fat32 and fat_bits == 16 and total_clusters >= 65525) {
+                fat_bits = 32;
+                reserved_sectors = 32;
+                root_entries = 0;
+                root_dir_sectors = 0;
+                fat_sectors = 1;
+                continue;
+            }
+
+            const bits: usize = fat_bits;
+            const fat_bytes = ((total_clusters + 2) * bits + 7) / 8;
             const need = (fat_bytes + sector_size - 1) / sector_size;
             if (need == fat_sectors) break;
             fat_sectors = need;
         }
-        const data_start_sector = 1 + 2 * fat_sectors + root_dir_sectors;
+        const data_start_sector = reserved_sectors + 2 * fat_sectors + root_dir_sectors;
         if (data_start_sector >= total_sectors) return Error.TooSmall;
         total_clusters = (total_sectors - data_start_sector) / opts.cluster_sectors;
 
@@ -329,12 +347,15 @@ pub const Builder = struct {
             .sector_size = sector_size,
             .cluster_bytes = cluster_bytes,
             .total_sectors = total_sectors,
+            .reserved_sectors = reserved_sectors,
+            .num_fats = 2,
             .root_entries = root_entries,
             .root_dir_sectors = root_dir_sectors,
             .fat_sectors = fat_sectors,
             .fat_bits = fat_bits,
             .data_start_sector = data_start_sector,
             .total_clusters = total_clusters,
+            .root_cluster = if (fat_bits == 32) 2 else 0,
         };
     }
 
@@ -366,16 +387,18 @@ pub const Builder = struct {
         const cluster: usize = sector * self.opts.cluster_sectors;
 
         var data_bytes = estimateDataBytes(self.root, cluster, true);
+        const fat32 = self.opts.fat32 or (data_bytes / cluster) >= 65525;
+        if (fat32) data_bytes += cluster; // FAT32 根目录占一个簇
         data_bytes = std.mem.alignForward(usize, data_bytes, cluster);
         const clusters_est = data_bytes / cluster;
-        const bits: usize = if (clusters_est < 4085) 12 else 16;
-        if (clusters_est >= 65525) return Error.Fat32Required;
+        const bits: usize = if (fat32) 32 else if (clusters_est < 4085) 12 else 16;
+        const reserved: usize = if (fat32) 32 else 1;
+        const root_dir_sectors: usize = if (fat32) 0 else (512 * 32 + sector - 1) / sector;
 
         const fat_bytes = (clusters_est + 2) * bits / 8;
-        const root_dir_sectors = (512 * 32 + sector - 1) / sector;
-        var total = sector + 2 * std.mem.alignForward(usize, fat_bytes, sector) + root_dir_sectors * sector + data_bytes;
+        var total = reserved * sector + 2 * std.mem.alignForward(usize, fat_bytes, sector) + root_dir_sectors * sector + data_bytes;
         total = std.mem.alignForward(usize, total, cluster);
-        const min_total = 128 * sector;
+        const min_total = (if (fat32) @as(usize, 0x10000) else 128) * sector;
         if (total < min_total) total = min_total;
         return total;
     }
@@ -402,13 +425,21 @@ pub const Builder = struct {
         l: Layout,
         cluster_bytes: usize,
 
+        fn eoc(self: *const Alloc) u32 {
+            return switch (self.l.fat_bits) {
+                12 => 0xFFF,
+                16 => 0xFFFF,
+                else => 0x0FFFFFFF,
+            };
+        }
+
         fn allocChain(self: *Alloc, a: std.mem.Allocator, size: usize) !u32 {
             const count = @max(@as(usize, 1), (size + self.cluster_bytes - 1) / self.cluster_bytes);
             if (self.next - 2 + count > self.l.total_clusters) return Error.NotEnoughSpace;
             const first = self.next;
             var i: usize = 0;
             while (i < count) : (i += 1) {
-                try self.fat.append(a, if (i + 1 == count) 0xFFFFFFFF else self.next + 1);
+                try self.fat.append(a, if (i + 1 == count) self.eoc() else self.next + 1);
                 self.next += 1;
             }
             return first;
@@ -439,6 +470,13 @@ pub const Builder = struct {
                     }
                 }
             }
+        } else if (l.fat_bits == 32) {
+            var i: usize = 0;
+            while (i < l.total_clusters + 2) : (i += 1) {
+                const raw: u32 = if (i < fat.len) fat[i] else 0;
+                const v: u32 = raw & 0x0FFFFFFF;
+                std.mem.writeInt(u32, buf[i * 4 ..][0..4], v, .little);
+            }
         } else {
             var i: usize = 0;
             while (i < l.total_clusters + 2) : (i += 1) {
@@ -468,7 +506,7 @@ pub const Builder = struct {
         std.mem.writeInt(u16, e[14..16], time, .little); // crtTime
         std.mem.writeInt(u16, e[16..18], date, .little); // crtDate
         std.mem.writeInt(u16, e[18..20], date, .little); // lstAccDate
-        std.mem.writeInt(u16, e[20..22], 0, .little); // fstClusHI
+        std.mem.writeInt(u16, e[20..22], @intCast((cluster >> 16) & 0xFFFF), .little); // fstClusHI
         std.mem.writeInt(u16, e[22..24], time, .little); // wrtTime
         std.mem.writeInt(u16, e[24..26], date, .little); // wrtDate
         std.mem.writeInt(u16, e[26..28], @intCast(cluster & 0xFFFF), .little);
@@ -564,8 +602,13 @@ pub const Builder = struct {
         var alloc = Alloc{ .fat = .empty, .l = l, .cluster_bytes = l.cluster_bytes };
         defer alloc.fat.deinit(a);
 
-        try alloc.fat.append(a, (if (l.fat_bits == 12) @as(u32, 0xF00) else 0xFF00) | 0xF8);
-        try alloc.fat.append(a, if (l.fat_bits == 12) 0xFFF else 0xFFFF);
+        if (l.fat_bits == 32) {
+            try alloc.fat.append(a, 0x0FFFFFF8);
+            try alloc.fat.append(a, 0x0FFFFFFF);
+        } else {
+            try alloc.fat.append(a, (if (l.fat_bits == 12) @as(u32, 0xF00) else 0xFF00) | 0xF8);
+            try alloc.fat.append(a, if (l.fat_bits == 12) 0xFFF else 0xFFFF);
+        }
 
         try self.allocateDir(a, &alloc, self.root, true);
 
@@ -576,11 +619,19 @@ pub const Builder = struct {
         const dt = fatDateTime(self.opts.mtime);
         self.writeBootSector(img, l);
         self.writeAicInfo(img, l);
+        if (l.fat_bits == 32) {
+            self.writeFsInfo(img, l);
+            const sector = l.sector_size;
+            if (img.len >= (l.backup_boot_sector + 2) * sector) {
+                @memcpy(img[l.backup_boot_sector * sector ..][0..sector], img[0..sector]);
+                @memcpy(img[(l.backup_boot_sector + 1) * sector ..][0..sector], img[l.fsinfo_sector * sector ..][0..sector]);
+            }
+        }
 
         // FAT 表
         const fat_buf = serializeFat(l, alloc.fat.items);
         defer std.heap.page_allocator.free(fat_buf);
-        const fat_off = l.sector_size;
+        const fat_off = l.reserved_sectors * l.sector_size;
         var fi: usize = 0;
         while (fi < 2) : (fi += 1) {
             @memcpy(img[fat_off + fi * l.fat_sectors * l.sector_size ..][0..fat_buf.len], fat_buf);
@@ -592,7 +643,11 @@ pub const Builder = struct {
     }
 
     fn allocateDir(self: *Builder, a: std.mem.Allocator, alloc: *Alloc, dir: *Node, is_root: bool) !void {
-        if (!is_root) {
+        if (is_root) {
+            if (alloc.l.fat_bits == 32) {
+                dir.cluster = try alloc.allocChain(a, dirEntryBytes(dir, true));
+            }
+        } else {
             const bytes = dirEntryBytes(dir, false);
             dir.cluster = try alloc.allocChain(a, bytes);
         }
@@ -613,8 +668,8 @@ pub const Builder = struct {
         defer entries.deinit(std.heap.page_allocator);
 
         const root_dir_off = l.sector_size * (l.reserved_sectors + l.num_fats * l.fat_sectors);
-        const dir_off: usize = if (is_root) root_dir_off else clusterOffset(l, dir.cluster);
-        const dir_capacity: usize = if (is_root) l.root_dir_sectors * l.sector_size else clusterBytesForDir(l, dir, is_root);
+        const dir_off: usize = if (is_root and l.fat_bits != 32) root_dir_off else clusterOffset(l, dir.cluster);
+        const dir_capacity: usize = if (is_root and l.fat_bits != 32) l.root_dir_sectors * l.sector_size else clusterBytesForDir(l, dir, is_root);
 
         // 卷标
         if (is_root) {
@@ -639,7 +694,8 @@ pub const Builder = struct {
             @memset(self_entry, 0);
             @memcpy(self_entry[0..11], ".          ");
             self_entry[11] = 0x10;
-            std.mem.writeInt(u16, self_entry[26..28], @intCast(dir.cluster), .little);
+            std.mem.writeInt(u16, self_entry[20..22], @intCast((dir.cluster >> 16) & 0xFFFF), .little);
+            std.mem.writeInt(u16, self_entry[26..28], @intCast(dir.cluster & 0xFFFF), .little);
             std.mem.writeInt(u16, self_entry[24..26], dt.date, .little);
             std.mem.writeInt(u16, self_entry[22..24], dt.time, .little);
 
@@ -647,8 +703,9 @@ pub const Builder = struct {
             @memset(parent_entry, 0);
             @memcpy(parent_entry[0..11], "..         ");
             parent_entry[11] = 0x10;
-            const parent_cluster: u32 = if (dir.parent) |p| (if (p == self.root) 0 else p.cluster) else 0;
-            std.mem.writeInt(u16, parent_entry[26..28], @intCast(parent_cluster), .little);
+            const parent_cluster: u32 = if (dir.parent) |p| (if (p == self.root) (if (l.fat_bits == 32) self.root.cluster else 0) else p.cluster) else 0;
+            std.mem.writeInt(u16, parent_entry[20..22], @intCast((parent_cluster >> 16) & 0xFFFF), .little);
+            std.mem.writeInt(u16, parent_entry[26..28], @intCast(parent_cluster & 0xFFFF), .little);
             std.mem.writeInt(u16, parent_entry[24..26], dt.date, .little);
             std.mem.writeInt(u16, parent_entry[22..24], dt.time, .little);
             off = 64;
@@ -682,8 +739,8 @@ pub const Builder = struct {
     }
 
     fn clusterBytesForDir(l: Layout, dir: *Node, is_root: bool) usize {
-        if (is_root) return l.root_dir_sectors * l.sector_size;
-        const entries_bytes = dirEntryBytes(dir, false);
+        if (is_root and l.fat_bits != 32) return l.root_dir_sectors * l.sector_size;
+        const entries_bytes = dirEntryBytes(dir, is_root);
         return std.mem.alignForward(usize, entries_bytes, l.cluster_bytes);
     }
 
@@ -697,29 +754,29 @@ pub const Builder = struct {
         const b = img[0..l.sector_size];
         @memset(b, 0);
         b[0] = 0xEB;
-        b[1] = 0x3C;
+        b[1] = if (l.fat_bits == 32) 0x58 else 0x3C;
         b[2] = 0x90;
         @memcpy(b[3..11], "WKLITE  ");
         std.mem.writeInt(u16, b[11..13], self.opts.sector_size, .little);
         b[13] = self.opts.cluster_sectors;
-        std.mem.writeInt(u16, b[14..16], 1, .little); // reserved
+        std.mem.writeInt(u16, b[14..16], @intCast(l.reserved_sectors), .little);
         b[16] = 2; // fats
         std.mem.writeInt(u16, b[17..19], @intCast(l.root_entries), .little);
         const total = l.total_sectors;
-        if (total < 0x10000) {
+        if (l.fat_bits == 32) {
+            std.mem.writeInt(u16, b[19..21], 0, .little);
+            std.mem.writeInt(u32, b[32..36], @intCast(total), .little);
+        } else if (total < 0x10000) {
             std.mem.writeInt(u16, b[19..21], @intCast(total), .little);
         } else {
             std.mem.writeInt(u16, b[19..21], 0, .little);
             std.mem.writeInt(u32, b[32..36], @intCast(total), .little);
         }
         b[21] = 0xF8; // media
-        std.mem.writeInt(u16, b[22..24], @intCast(l.fat_sectors), .little);
         std.mem.writeInt(u16, b[24..26], 63, .little); // sectors/track
         std.mem.writeInt(u16, b[26..28], 255, .little); // heads
         std.mem.writeInt(u32, b[28..32], 0, .little); // hidden
-        b[36] = 0x80;
-        b[38] = 0x29;
-        std.mem.writeInt(u32, b[39..43], self.opts.volume_id, .little);
+
         var label: [11]u8 = @splat(' ');
         var li: usize = 0;
         for (self.opts.volume_label) |c| {
@@ -727,10 +784,43 @@ pub const Builder = struct {
             label[li] = std.ascii.toUpper(c);
             li += 1;
         }
-        @memcpy(b[43..54], &label);
-        @memcpy(b[54..62], if (l.fat_bits == 12) "FAT12   " else "FAT16   ");
+
+        if (l.fat_bits == 32) {
+            std.mem.writeInt(u16, b[22..24], 0, .little); // FATSz16
+            std.mem.writeInt(u32, b[36..40], @intCast(l.fat_sectors), .little); // FATSz32
+            std.mem.writeInt(u16, b[40..42], 0, .little); // ExtFlags
+            std.mem.writeInt(u16, b[42..44], 0, .little); // FSVer
+            std.mem.writeInt(u32, b[44..48], l.root_cluster, .little);
+            std.mem.writeInt(u16, b[48..50], @intCast(l.fsinfo_sector), .little);
+            std.mem.writeInt(u16, b[50..52], @intCast(l.backup_boot_sector), .little);
+            b[64] = 0x80;
+            b[66] = 0x29;
+            std.mem.writeInt(u32, b[67..71], self.opts.volume_id, .little);
+            @memcpy(b[71..82], &label);
+            @memcpy(b[82..90], "FAT32   ");
+        } else {
+            std.mem.writeInt(u16, b[22..24], @intCast(l.fat_sectors), .little);
+            b[36] = 0x80;
+            b[38] = 0x29;
+            std.mem.writeInt(u32, b[39..43], self.opts.volume_id, .little);
+            @memcpy(b[43..54], &label);
+            @memcpy(b[54..62], if (l.fat_bits == 12) "FAT12   " else "FAT16   ");
+        }
         b[510] = 0x55;
         b[511] = 0xAA;
+    }
+
+    fn writeFsInfo(self: *Builder, img: []u8, l: Layout) void {
+        _ = self;
+        const off = l.fsinfo_sector * l.sector_size;
+        if (img.len < off + l.sector_size) return;
+        const s = img[off .. off + l.sector_size];
+        @memset(s, 0);
+        std.mem.writeInt(u32, s[0..4], 0x41615252, .little);
+        std.mem.writeInt(u32, s[484..488], 0x61417272, .little);
+        std.mem.writeInt(u32, s[488..492], 0xFFFFFFFF, .little); // free count unknown
+        std.mem.writeInt(u32, s[492..496], 0xFFFFFFFF, .little); // next free unknown
+        std.mem.writeInt(u32, s[508..512], 0xAA550000, .little);
     }
 
     /// AIC 扩展信息块（makefatfs.py::set_image_info_to_boot_sector）
@@ -843,6 +933,40 @@ test "FAT16 选择与容量检查" {
     const img = try b.build();
     defer allocator.free(img);
     try std.testing.expectEqualStrings("FAT16   ", img[54..62]);
+}
+
+test "FAT32 镜像：BPB、FSInfo、根目录簇与目录项" {
+    const allocator = std.testing.allocator;
+    var b = try Builder.init(allocator, .{
+        .total_bytes = 16 * 1024 * 1024,
+        .cluster_sectors = 1,
+        .volume_label = "FAT32T",
+        .fat32 = true,
+    });
+    defer b.deinit();
+    try b.addFile("hello.txt", "hello fat32");
+    try b.addDir("sub");
+    try b.addFile("sub/a.bin", "abc");
+
+    const img = try b.build();
+    defer allocator.free(img);
+
+    // BPB：FAT32 标识、保留 32 扇区、根目录项 0、root cluster 2
+    try std.testing.expectEqualStrings("FAT32   ", img[82..90]);
+    try std.testing.expectEqual(@as(u16, 32), std.mem.readInt(u16, img[14..16], .little));
+    try std.testing.expectEqual(@as(u16, 0), std.mem.readInt(u16, img[17..19], .little));
+    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, img[44..48], .little));
+    try std.testing.expectEqual(@as(u32, 0x41615252), std.mem.readInt(u32, img[512..516], .little));
+
+    // 备份引导扇区
+    try std.testing.expectEqual(@as(u8, 0x55), img[6 * 512 + 510]);
+    try std.testing.expectEqual(@as(u8, 0xAA), img[6 * 512 + 511]);
+
+    // 根目录在 cluster 2
+    const fat_sectors = std.mem.readInt(u32, img[36..40], .little);
+    const root_off = (32 + 2 * fat_sectors) * 512;
+    try std.testing.expectEqual(@as(u8, 0x08), img[root_off + 11]);
+    try std.testing.expectEqualStrings("FAT32T     ", img[root_off .. root_off + 11]);
 }
 
 test "--auto 尺寸：与参考 makefatfs.py -a 一致" {

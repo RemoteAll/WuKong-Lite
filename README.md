@@ -54,8 +54,9 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
   列出 images/configurations，并按 `hash-N` 重算 crc32/md5/sha1/sha256（等价 bootm 的完整性检查）。
 - **镜像加密**：`wk image crypt` 提供 AES-128-CBC 加/解密（`--pad none|zero|pkcs7`），
   与参考 `openssl enc -aes-128-cbc -nopad` 逐字节一致。
-- **FAT 镜像构建**：`wk image fat` 生成 FAT12/FAT16 数据分区镜像（LFN 长文件名、
+- **FAT 镜像构建**：`wk image fat` 生成 FAT12/FAT16/FAT32 数据分区镜像（LFN 长文件名、
   8.3 短名去重、卷标、`FAT 时间戳`），`--auto` 按内容估算尺寸（等价 `makefatfs.py -a`），
+  `--fat32` 可强制 FAT32（含 BPB/FSInfo/备份引导/根目录簇），
   并在 0x80 写入 40 字节 AIC 扩展信息块 `AICF`（image_size/used_size + 校验和）。
 - **RSA 签名/验签**：`wk image rsasign/rsaverify` 实现 PKCS#1 v1.5 + SHA-256
   （PKCS#1/PKCS#8 私钥、SPKI/PKCS#1 公钥 PEM，2048/3072/4096 位）。
@@ -125,6 +126,7 @@ zig-out\bin\wk.exe image itb --its app_os.its -o os.itb
 zig-out\bin\wk.exe image crypt --input kernel.bin --key 000102030405060708090a0b0c0d0e0f --iv 101112131415161718191a1b1c1d1e1f --pad zero
 zig-out\bin\wk.exe image fitinfo --input os.itb --verify
 zig-out\bin\wk.exe image fat --input-dir rootfs --output data.img --size 8M --cluster 4 --label WKROOT
+zig-out\bin\wk.exe image fat --input-dir rootfs --output data32.img --size 16M --cluster 1 --label FAT32T --fat32
 zig-out\bin\wk.exe image fat --input-dir rootfs --output data.img --auto --cluster 4 --label WKROOT
 zig-out\bin\wk.exe image rsasign --input os.bin --key rsa2048.pem -o os.sig
 zig-out\bin\wk.exe image rsaverify --input os.bin --key rsa2048_pub.pem --sig os.sig

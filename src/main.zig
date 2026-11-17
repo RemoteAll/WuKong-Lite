@@ -139,7 +139,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image crypt --input <bin> --key <32hex> --iv <32hex> [--decrypt] [--pad zero|pkcs7] [-o out.bin]
         \\  image fitinfo --input <itb> [--dump] [--verify]
         \\  image fat --input-dir <dir> --output <img> --size <bytes> [--sector 512] [--cluster 8] [--label NAME]
-        \\          （--auto 可省略 --size，按内容估算，等价 makefatfs.py -a）
+        \\          （--auto 可省略 --size，按内容估算，等价 makefatfs.py -a；--fat32 强制 FAT32）
         \\  image rsasign --input <file> --key <priv.pem> [-o sig.bin]
         \\  image rsaverify --input <file> --key <pub.pem> --sig <sig.bin>
         \\  image simg --input <raw> [--output <sparse>] [--block 4096] [--unsparse]
@@ -872,6 +872,7 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
             .cluster_sectors = cluster,
             .volume_label = getOpt(rest, "--label") orelse "NO NAME",
             .mtime = if (getOpt(rest, "--mtime")) |v| @intCast(std.fmt.parseInt(u32, v, 0) catch return error.InvalidArgument) else 0,
+            .fat32 = hasFlag(rest, "--fat32"),
         });
         defer builder.deinit();
 
