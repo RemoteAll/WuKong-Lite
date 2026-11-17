@@ -33,6 +33,8 @@
 
 ## 与本仓库的关系
 
+- `docs/official/luban-lite-architecture.md`：官方 `luban-lite` 仓库的定位与分层说明
+  （它是完整固件 SDK，OS 只是其中一层）。
 - `docs/FLASHING.md` 是面向 WuKong-Lite 的烧写说明（官方 upgcmd 直烧 + AIBURN 两种路径 + 本机实测结论）。
 - `tools/fetch-upgcmd-deps.ps1` 补齐 upgcmd 依赖（UsbDkHelper/libgcc/libwinpthread），
   产物在 `wk/image/tools/upgcmd`（已 gitignore）。
