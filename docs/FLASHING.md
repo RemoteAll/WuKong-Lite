@@ -9,6 +9,9 @@ Luban-Lite 的官方烧写文档在 `doc/skills/aiburn/`，已原样迁移到
 
 ## 关于“upgcmd 是否开源”
 
+> 二进制里能看到 `main.cpp`、`app_proto_layer.c` 等名字，那只是编译路径，不是源码；
+> 详细取证见 `docs/official/upgcmd-binary-map.md`。
+
 - SDK 里只有**预编译**的 `tools/scripts/upgcmd`（Linux ELF）与 `upgcmd.exe`（32 位 Windows），
   没有主机端源码（二进制里能看到构建路径 `aicupg/upgcmd/main.cpp`、libusb + UsbDk）。
 - **设备端协议是开源的**：`application/baremetal/bootloader/lib/aicupg/*.c`
