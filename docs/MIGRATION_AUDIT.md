@@ -31,6 +31,8 @@
 | `img2simg` | `src/tools/sparse.zig` | 11 组样本 + FAT 镜像逐字节一致 |
 | `simg_dump.py` | `wk image simg --dump` | 头部/chunk 表文本 + 单测（2026-11-17） |
 | `cpio -H crc` | `src/tools/cpio.zig` | 参考 cpio 可解包；结构一致 |
+| `mkcpio.py`（OTA） | `src/tools/ota.zig`、`wk image ota` | 512B env + crc cpio + size 回填；`cpio.exe -it` 可列出（2026-11-17） |
+| `merge_files.py` | `src/tools/merge.zig`、`wk image merge` | 按序拼接，字节实测通过（2026-11-17） |
 | `openssl`（AES/RSA 子集） | `crypt.zig`、`rsa.zig` | AES 双向逐字节；RSA 与 openssl 互通 |
 | `upgcmd`（使用侧） | `tools/fetch-upgcmd-deps.ps1`、`flash-*.ps1` | `-e` 解析本仓库 AIC.FW |
 | Kconfig/defconfig/codegen | `kconfig.zig`、`codegen.zig`、`modules.zig` | 单测覆盖 |
@@ -41,7 +43,6 @@
 | 官方 | 已做 | 缺口 |
 |------|------|------|
 | `makefatfs.py` | FAT12/16、LFN、`--auto` 尺寸 | FAT32、`--fullpart`、AICF `dirent_*` 列表、`fatupdate` 的 used_size 口径 |
-| `mkcpio.py` | 基础 newc/crc 归档 | OTA `ota-subimgs.cfg` 解析、ota.cpio 尺寸回填、`ota-temp.cfg` 生成 |
 | `mkimage` 签名/加密 | 独立 RSA/AES 工具 | ITS `signature*`/`cipher` 节点、AIC 头 `sign_algo/encrypt_algo`/iv 区间联动 |
 | `aic_build.py` | Kconfig→build_plan→codegen | SCons 全量构建、链接脚本/工具链选择、镜像后处理流水线 |
 | 官方文档 | aiburn 技能 | `topics/` 464 篇、`images/`、`webhelp/` 未迁（体积原因，可按需） |
@@ -61,7 +62,7 @@
 - 固件加密：`firmware_security_encrypt`（含 nonce/tweak 的 AES-XTS 类流程）、
   `encrypt_rsa_key.py`、SPIENC/eFuse 安全启动；
 - `mkimage` 的 RSA/SM2 签名节点、公钥内嵌、`-K` 更新 dtb；
-- 镜像辅助脚本：`merge_files.py`、`calc_linked_addr.py`、`linked_size.py`、
+- 镜像辅助脚本：`calc_linked_addr.py`、`linked_size.py`、
   `gen_partition_file_list.py`、`partition_check.py`、`fsinstall.py`、
   `config_update.py`、`rtt2freertos.py`、`sdk_update.py`、`release_patch.py`、
   `panic_parse.py`、`build_mini_bootloader.py`。

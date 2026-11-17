@@ -63,6 +63,9 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
   尾部补零），`--unsparse` 可展开；与参考 `img2simg.exe` 输出**逐字节一致**。
 - **cpio 归档**：`wk image cpio` 按文件清单生成 `newc`/`crc` 归档（名字/数据 4 字节对齐、
   `TRAILER!!!`、512 对齐），对应 `mkcpio.py` 里 `cpio -ov -H crc` 的 OTA 子镜像。
+- **OTA 打包**：`wk image ota` 解析 `ota-subimgs.cfg`、写回 image_cfg 的 version、生成
+  512B `ota_info.bin`、按 `[file]` 列表生成 crc cpio，并把 `ota.cpio` 总大小回填到 `size` 字段。
+- **文件拼接**：`wk image merge` 按 `--input` 顺序原样拼接（对应 `merge_files.py`）。
 - **烧写包准备**：`wk image flashpack` 读取 image_cfg 与 payload 目录，校验 AIC/FIT、
   自动补 `env.bin`/`rodata.fatfs`、按分区大小检查，输出 AIC.FW + `manifest.txt` + `FLASH.md`
   + `flash-upgcmd.ps1` / `flash-aiburn.ps1`。
@@ -125,6 +128,8 @@ zig-out\bin\wk.exe image rsasign --input os.bin --key rsa2048.pem -o os.sig
 zig-out\bin\wk.exe image rsaverify --input os.bin --key rsa2048_pub.pem --sig os.sig
 zig-out\bin\wk.exe image simg --input data.img --output data.img.sparse --block 4096
 zig-out\bin\wk.exe image cpio --list ota-list.txt --input-dir out --output ota.cpio
+zig-out\bin\wk.exe image ota --ota-cfg pack/ota-subimgs.cfg --image-cfg pack/image_cfg.json --input-dir out --out-dir out
+zig-out\bin\wk.exe image merge --output merged.bin --input a.bin --input b.bin
 zig-out\bin\wk.exe image flashpack --payload-dir payload --out-dir flash
 powershell -File tools\fetch-upgcmd-deps.ps1 -SdkRoot <luban-lite>
 powershell -File flash\flash-upgcmd.ps1 -Monitor COM5

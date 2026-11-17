@@ -23,14 +23,14 @@
 | P1-4 | `firmware_security_encrypt`（AES-XTS/nonce/tweak） | ⬜ | 参考 exe 加密结果逐字节 | 先确认密钥/nonce 派生与镜像布局 |
 | P1-5 | `encrypt_rsa_key.py` | ⬜ | 参考脚本输出 | 与 P1-4 共用密钥封装 |
 | P1-6 | ITS `signature*`/`cipher` 节点 + AIC 头签名/加密联动 | 🟡 | `mkimage` 签名 FIT + 我们解析 | 独立 RSA/AES 已有；补节点生成与头字段 |
-| P1-7 | `mkcpio` OTA（`ota-subimgs.cfg`、`ota-temp.cfg`、尺寸回填） | 🟡 | 参考 `mkcpio.py` 产物 + cpio 解包 | 先做配置解析与 size 回填 |
+| P1-7 | `mkcpio` OTA（`ota-subimgs.cfg`、`ota_info.bin`、尺寸回填） | ✅ | `wk image ota` 生成 512B env + crc cpio；`cpio.exe -it` 可列出；size 回填实测 1024 | 2026-11-17 完成 |
 | P1-8 | `simg_dump` 等价 CLI | ✅ | `wk image simg --dump` 输出头/chunk 表，单测覆盖 | 2026-11-17 完成 |
 
 ## P2 · 主机辅助工具
 
 | ID | 项目 | 状态 | 验证基线 | 说明 |
 |----|------|------|----------|------|
-| P2-1 | `merge_files.py` | ⬜ | 输出文件 SHA256 | 按 offset 合并 + 空洞填充 |
+| P2-1 | `merge_files.py` | ✅ | `wk image merge` 按顺序字节拼接，实测 1,2,3 + 4,5 + 6,7,8,9 → 1..9 | 2026-11-17 完成 |
 | P2-2 | `calc_linked_addr.py` | ⬜ | 参考脚本输出 | 解析 ELF/map 计算链接地址 |
 | P2-3 | `linked_size.py` | ⬜ | 参考脚本输出 | 统计段/符号尺寸 |
 | P2-4 | `gen_partition_file_list.py` / `partition_check.py` | ⬜ | 参考输出 | 依赖现有分区表解析 |

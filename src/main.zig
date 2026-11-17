@@ -22,6 +22,8 @@ const fat = aic.fat;
 const rsa = aic.rsa;
 const sparse = aic.sparse;
 const cpio = aic.cpio;
+const merge = aic.merge;
+const ota = aic.ota;
 const flashpack = aic.flashpack;
 const fw_image = aic.fw_image;
 const image = aic.image;
@@ -142,6 +144,8 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image simg --input <raw> [--output <sparse>] [--block 4096] [--unsparse]
         \\  image simg --input <sparse> --dump            # 打印头与 chunk 表
         \\  image cpio --list <file> --input-dir <dir> -o <ota.cpio> [--format crc|newc] [--mtime 0]
+        \\  image merge --output <file> --input <file> [--input <file> ...]
+        \\  image ota --ota-cfg <ota-subimgs.cfg> --image-cfg <image_cfg.json> [--input-dir <dir>] [--out-dir <dir>]
         \\  image flashpack [--config <image_cfg.json>] [--payload-dir <dir>] [--out-dir <dir>]
         \\  image dump <file>
         \\
@@ -980,6 +984,61 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         return;
     }
 
+    if (std.mem.eql(u8, sub, "merge")) {
+        const output = getOpt(rest, "-o") orelse getOpt(rest, "--output") orelse return error.MissingArgument;
+        var inputs: std.ArrayList([]const u8) = .empty;
+        defer inputs.deinit(aa);
+        try collectOpts(rest, aa, "--input", &inputs);
+        try collectOpts(rest, aa, "-i", &inputs);
+        if (inputs.items.len == 0) return error.MissingArgument;
+
+        var blobs: std.ArrayList([]u8) = .empty;
+        defer {
+            for (blobs.items) |b| aa.free(b);
+            blobs.deinit(aa);
+        }
+        var parts: std.ArrayList([]const u8) = .empty;
+        defer parts.deinit(aa);
+        var total: usize = 0;
+        for (inputs.items) |path| {
+            const data = try readBytes(io, aa, path);
+            total += data.len;
+            try blobs.append(aa, data);
+            try parts.append(aa, data);
+        }
+
+        const merged = try merge.merge(aa, parts.items);
+        defer aa.free(merged);
+        try ensureParentDir(io, output);
+        try writeBytes(io, output, merged);
+        try out.print("merge: {d} 个文件 -> {s}（{d} bytes）\n", .{ inputs.items.len, output, total });
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "ota")) {
+        const ota_cfg = getOpt(rest, "--ota-cfg") orelse return error.MissingArgument;
+        const image_cfg_path = getOpt(rest, "--image-cfg") orelse return error.MissingArgument;
+        const out_dir = getOpt(rest, "--out-dir") orelse IMAGE_DIR;
+        const input_dir = getOpt(rest, "--input-dir") orelse out_dir;
+        const mtime = parseU32Opt(rest, "--mtime", 0) catch return error.InvalidArgument;
+
+        var result = ota.run(aa, io, .{
+            .ota_cfg = ota_cfg,
+            .image_cfg = image_cfg_path,
+            .input_dir = input_dir,
+            .out_dir = out_dir,
+            .mtime = mtime,
+        }) catch |err| {
+            try out.print("ota 失败：{s}\n", .{@errorName(err)});
+            return err;
+        };
+        defer result.deinit(aa);
+        try out.print("ota: version {s}，{d} 个文件，ota.cpio {d} bytes -> {s}\n", .{
+            result.version, result.files, result.archive.len, out_dir,
+        });
+        return;
+    }
+
     if (std.mem.eql(u8, sub, "cpio")) {
         const list_path = getOpt(rest, "--list") orelse return error.MissingArgument;
         const output = getOpt(rest, "-o") orelse getOpt(rest, "--output") orelse return error.MissingArgument;
@@ -1284,6 +1343,28 @@ fn hasFlag(args: []const []const u8, name: []const u8) bool {
         if (std.mem.eql(u8, a, name)) return true;
     }
     return false;
+}
+
+/// 收集可重复选项：`--input a --input b` 或 `--input=a`。
+fn collectOpts(
+    args: []const []const u8,
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    out: *std.ArrayList([]const u8),
+) !void {
+    var i: usize = 0;
+    while (i < args.len) {
+        const a = args[i];
+        if (std.mem.eql(u8, a, name)) {
+            if (i + 1 < args.len) try out.append(allocator, args[i + 1]);
+            i += 2;
+            continue;
+        }
+        if (std.mem.startsWith(u8, a, name) and a.len > name.len and a[name.len] == '=') {
+            try out.append(allocator, a[name.len + 1 ..]);
+        }
+        i += 1;
+    }
 }
 
 fn parseU32Opt(args: []const []const u8, name: []const u8, default: u32) !u32 {
