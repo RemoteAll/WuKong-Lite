@@ -31,7 +31,7 @@
 | ID | 项目 | 状态 | 验证基线 | 说明 |
 |----|------|------|----------|------|
 | P2-1 | `merge_files.py` | ✅ | `wk image merge` 按顺序字节拼接，实测 1,2,3 + 4,5 + 6,7,8,9 → 1..9 | 2026-11-17 完成 |
-| P2-2 | `calc_linked_addr.py` | ⬜ | 参考脚本输出 | 解析 ELF/map 计算链接地址 |
+| P2-2 | `calc_linked_addr.py` | ✅ | `wk image linkaddr`：MEM_AUTO/显式 TEXT_BASE + 4 占位符替换；实测 text=0x400ef000/load=0x400eef00 | 2026-11-17 完成 |
 | P2-3 | `linked_size.py` | ⬜ | 参考脚本输出 | 统计段/符号尺寸 |
 | P2-4 | `gen_partition_file_list.py` / `partition_check.py` | ⬜ | 参考输出 | 依赖现有分区表解析 |
 | P2-5 | `fsinstall.py` / `config_update.py` / `rtt2freertos.py` / `sdk_update.py` / `release_patch.py` / `panic_parse.py` / `build_mini_bootloader.py` | ⬜ | 逐脚本对照 | 按实际使用频率排序 |

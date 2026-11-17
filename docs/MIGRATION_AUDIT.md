@@ -33,6 +33,7 @@
 | `cpio -H crc` | `src/tools/cpio.zig` | 参考 cpio 可解包；结构一致 |
 | `mkcpio.py`（OTA） | `src/tools/ota.zig`、`wk image ota` | 512B env + crc cpio + size 回填；`cpio.exe -it` 可列出（2026-11-17） |
 | `merge_files.py` | `src/tools/merge.zig`、`wk image merge` | 按序拼接，字节实测通过（2026-11-17） |
+| `calc_linked_addr.py` | `src/tools/linkaddr.zig`、`wk image linkaddr` | MEM_AUTO/显式 TEXT_BASE + 4 占位符替换；实测通过（2026-11-17） |
 | `openssl`（AES/RSA 子集） | `crypt.zig`、`rsa.zig` | AES 双向逐字节；RSA 与 openssl 互通 |
 | `upgcmd`（使用侧） | `tools/fetch-upgcmd-deps.ps1`、`flash-*.ps1` | `-e` 解析本仓库 AIC.FW |
 | Kconfig/defconfig/codegen | `kconfig.zig`、`codegen.zig`、`modules.zig` | 单测覆盖 |
@@ -62,7 +63,7 @@
 - 固件加密：`firmware_security_encrypt`（含 nonce/tweak 的 AES-XTS 类流程）、
   `encrypt_rsa_key.py`、SPIENC/eFuse 安全启动；
 - `mkimage` 的 RSA/SM2 签名节点、公钥内嵌、`-K` 更新 dtb；
-- 镜像辅助脚本：`calc_linked_addr.py`、`linked_size.py`、
+- 镜像辅助脚本：`linked_size.py`、
   `gen_partition_file_list.py`、`partition_check.py`、`fsinstall.py`、
   `config_update.py`、`rtt2freertos.py`、`sdk_update.py`、`release_patch.py`、
   `panic_parse.py`、`build_mini_bootloader.py`。

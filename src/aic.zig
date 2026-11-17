@@ -30,6 +30,7 @@ pub const sparse = @import("tools/sparse.zig");
 pub const cpio = @import("tools/cpio.zig");
 pub const merge = @import("tools/merge.zig");
 pub const ota = @import("tools/ota.zig");
+pub const linkaddr = @import("tools/linkaddr.zig");
 pub const flashpack = @import("tools/flashpack.zig");
 pub const partition_table = @import("tools/partition_table.zig");
 pub const pack = @import("tools/pack.zig");

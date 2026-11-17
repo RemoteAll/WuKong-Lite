@@ -24,6 +24,7 @@ const sparse = aic.sparse;
 const cpio = aic.cpio;
 const merge = aic.merge;
 const ota = aic.ota;
+const linkaddr = aic.linkaddr;
 const flashpack = aic.flashpack;
 const fw_image = aic.fw_image;
 const image = aic.image;
@@ -146,6 +147,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image cpio --list <file> --input-dir <dir> -o <ota.cpio> [--format crc|newc] [--mtime 0]
         \\  image merge --output <file> --input <file> [--input <file> ...]
         \\  image ota --ota-cfg <ota-subimgs.cfg> --image-cfg <image_cfg.json> [--input-dir <dir>] [--out-dir <dir>]
+        \\  image linkaddr --config <.config> --input <image_cfg.json> [--output <json>]
         \\  image flashpack [--config <image_cfg.json>] [--payload-dir <dir>] [--out-dir <dir>]
         \\  image dump <file>
         \\
@@ -1036,6 +1038,31 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         try out.print("ota: version {s}，{d} 个文件，ota.cpio {d} bytes -> {s}\n", .{
             result.version, result.files, result.archive.len, out_dir,
         });
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "linkaddr")) {
+        const config_path = getOpt(rest, "--config") orelse getOpt(rest, "-c") orelse return error.MissingArgument;
+        const input = getOpt(rest, "--input") orelse getOpt(rest, "-i") orelse return error.MissingArgument;
+        const output = getOpt(rest, "-o") orelse getOpt(rest, "--output") orelse blk: {
+            break :blk try std.fmt.allocPrint(aa, "{s}.tmp", .{input});
+        };
+        defer if (getOpt(rest, "-o") == null and getOpt(rest, "--output") == null) aa.free(output);
+
+        const config = try readText(io, aa, config_path);
+        defer aa.free(config);
+        const image_cfg_text = try readText(io, aa, input);
+        defer aa.free(image_cfg_text);
+
+        const rewritten = linkaddr.rewrite(aa, config, image_cfg_text) catch |err| {
+            try out.print("linkaddr 失败：{s}\n", .{@errorName(err)});
+            return err;
+        };
+        defer aa.free(rewritten);
+        try ensureParentDir(io, output);
+        try writeText(io, output, rewritten);
+        const v = linkaddr.calculate(config) catch unreachable;
+        try out.print("linkaddr: text=0x{x} load=0x{x} -> {s}\n", .{ v.text, v.load, output });
         return;
     }
 
