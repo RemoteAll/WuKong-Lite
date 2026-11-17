@@ -5,6 +5,8 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
 并且与 Luban-Lite 生成的二进制格式、分区串、宏定义保持一致。
 
 > 参考项目：`G:\Code\C\luban-lite`（ArtInChip Luban-Lite SDK）
+>
+> 仓库地址：<https://github.com/RemoteAll/WuKong-Lite.git>（`origin` / `main`）
 
 ## 目录对照
 
