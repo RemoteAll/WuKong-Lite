@@ -209,4 +209,5 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
 5. 接入厂商 PBP 生成与烧写协议（AiBurn/upgcmd）才能真正脱离厂商 SDK 上板。
 
 > 烧写的具体命令、依赖与实测结论见 `docs/FLASHING.md`；
-> 官方文档迁移范围见 `docs/official/README.md`。
+> 官方文档迁移范围见 `docs/official/README.md`；
+> 全量迁移审计（已迁/部分/未迁 + 优先级）见 `docs/MIGRATION_AUDIT.md`。
