@@ -62,7 +62,10 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
 - **cpio 归档**：`wk image cpio` 按文件清单生成 `newc`/`crc` 归档（名字/数据 4 字节对齐、
   `TRAILER!!!`、512 对齐），对应 `mkcpio.py` 里 `cpio -ov -H crc` 的 OTA 子镜像。
 - **烧写包准备**：`wk image flashpack` 读取 image_cfg 与 payload 目录，校验 AIC/FIT、
-  自动补 `env.bin`/`rodata.fatfs`、按分区大小检查，输出 AIC.FW + `manifest.txt` + `FLASH.md`。
+  自动补 `env.bin`/`rodata.fatfs`、按分区大小检查，输出 AIC.FW + `manifest.txt` + `FLASH.md`
+  + `flash-upgcmd.ps1` / `flash-aiburn.ps1`。
+- **官方文档迁移**：`docs/official/` 收录 SDK 的 AIBURN 技能（含客户端脚本）与第三方许可证，
+  见 `docs/FLASHING.md`。
 - **ELF 工具**：`wk image elf2aic`（按 PT_LOAD 展开为 AIC 可启动镜像）、
   `wk image elf2its`（按参考 `elf2image` 规则提取 `segN.bin` 并生成 ITS，XIP 段序交换）。
 
@@ -115,6 +118,8 @@ zig-out\bin\wk.exe image rsaverify --input os.bin --key rsa2048_pub.pem --sig os
 zig-out\bin\wk.exe image simg --input data.img --output data.img.sparse --block 4096
 zig-out\bin\wk.exe image cpio --list ota-list.txt --input-dir out --output ota.cpio
 zig-out\bin\wk.exe image flashpack --payload-dir payload --out-dir flash
+powershell -File tools\fetch-upgcmd-deps.ps1 -SdkRoot <luban-lite>
+powershell -File flash\flash-upgcmd.ps1 -Monitor COM5
 zig-out\bin\wk.exe image env --config wk/target/d13x/demo88-nor/pack/image_cfg.json -o env.bin
 zig-out\bin\wk.exe run hello
 zig-out\bin\wk.exe shell
@@ -161,6 +166,8 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
   与参考归档做“归一化头字段”后比较，名字顺序/数据/校验和/对齐**完全一致**。
 - `wk image flashpack` 自测（demo payload）：生成 27,136 字节 AIC.FW，manifest 列出每个组件的
   SHA256/分区/状态；缺 env.txt 时报 `MISSING(optional)`，补齐后自动生成 env.bin 且 warnings 归零。
+- 补上 3 个 DLL 后，官方 `upgcmd.exe`（V1.4.2）的 `-e` **成功解析本工具生成的 AIC.FW**，
+  列出并解出 updater/info/target 全部组件。
 - 小样本回归向量（`a=b`、`-r -s 64`）已写入单元测试：`6D9AECC2 01 61 3D 62 00 00 FF...`。
 
 ## 测试覆盖
@@ -194,3 +201,6 @@ image_cfg.json -> demo88-nor.img     AIC.FW 固件包（头部 + META 表 + 数�
 3. 把 `build.zig` 接入 `.config`（按开关选择模块编译，等价 `SConscript` 的 `GetDepend`）；
 4. 补 FAT32、`makefatfs.py --fullpart` 与 AICF dirent 列表，以及 `mklittlefs` / `mkuffs` 镜像工具；
 5. 接入厂商 PBP 生成与烧写协议（AiBurn/upgcmd）才能真正脱离厂商 SDK 上板。
+
+> 烧写的具体命令、依赖与实测结论见 `docs/FLASHING.md`；
+> 官方文档迁移范围见 `docs/official/README.md`。

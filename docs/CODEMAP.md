@@ -148,6 +148,10 @@ FAT12 项：entry0 = 0xFF8、entry1 = 0xFFF；FAT16：0xFFF8 / 0xFFFF
 - **cpio 归档**：`wk image cpio --list files.txt --input-dir out -o ota.cpio`
   （默认 `crc`，可选 `--format newc`）；可用参考 `cpio.exe -idm` 回读。
 - **烧写包**：`wk image flashpack [--payload-dir payload] [--out-dir flash]`；
-  payload 放真实厂商 `bootloader.aic` / OS 文件；输出 AIC.FW + manifest + FLASH.md。
-- **未实现（明确边界）**：RSA/SM2 签名、AIC 头 `sign_algo/encrypt_algo` 与 iv/sign 区的联动布局、
-  makefatfs/mklittlefs 文件系统镜像。
+  payload 放真实厂商 `bootloader.aic` / OS 文件；输出 AIC.FW + manifest + FLASH.md
+  + `flash-upgcmd.ps1`（直烧）/ `flash-aiburn.ps1`（9100 server）。
+- **官方烧写工具**：`tools/fetch-upgcmd-deps.ps1` 补齐 upgcmd 的 3 个 DLL，
+  产物在 `wk/image/tools/upgcmd`；用法见 `docs/FLASHING.md`。
+- **官方文档**：`docs/official/`（迁移 `doc/skills/aiburn` 与第三方许可证）。
+- **未实现（明确边界）**：SM2/RSA-PSS/加密私钥、AIC 头 `sign_algo/encrypt_algo` 与
+  iv/sign 区联动、FAT32、`mklittlefs`/`mkuffs`、PBP 生成与 USB/UART 升级协议。

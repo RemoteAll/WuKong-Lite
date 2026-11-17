@@ -119,24 +119,162 @@ fn instructionsTemplate(allocator: std.mem.Allocator, img_name: []const u8) ![]u
         \\- `bootloader.aic` 必须是**厂商 SDK/PBP 流程**生成的（loader.aic + pbp_ext.aic 组合）；
         \\  WuKong-Lite 只做校验与打包，不生成 PBP。
         \\- `image.target.*` 指向的 OS 文件（如 `d13x_os.itb`）必须是真实可启动固件。
-        \\- 烧写工具用厂商的 AiBurn（USB）或 upgcmd/upgtool（UART），本仓库不含烧写上位机。
         \\
-        \\## USB（AiBurn，推荐）
+        \\## 官方烧写方式 A：upgcmd 直接烧（推荐，无需 server）
+        \\SDK 的 `tools/scripts/upgcmd.exe` 是独立烧写器（V1.4.2），支持 UART/USB：
+        \\
+        \\1. 先准备运行环境（SDK 内缺 3 个 DLL）：
+        \\
+        \\   ```powershell
+        \\   powershell -ExecutionPolicy Bypass -File tools\fetch-upgcmd-deps.ps1 -SdkRoot <luban-lite>
+        \\   ```
+        \\
+        \\2. 确认设备/串口后烧写：
+        \\
+        \\   ```powershell
+        \\   .\flash-upgcmd.ps1 -Monitor COM5 -DryRun
+        \\   .\flash-upgcmd.ps1 -Monitor COM5
+        \\   ```
+        \\
+        \\   等价于：`upgcmd.exe -i .\{s} -u COM5 -p -v`
+        \\   USB 模式用 `-d <bus:portnum>`（先 `upgcmd.exe -l` 查），需要已安装 UsbDk 驱动。
+        \\
+        \\3. 只解析/解包镜像（已验证可用于本工具生成的 AIC.FW）：
+        \\   `upgcmd.exe -e .\{s}`
+        \\
+        \\## 官方烧写方式 B：AIBURN 脚本（upgcmd Server:9100 + 串口日志）
+        \\`docs/official/skills/aiburn`（迁移自 SDK）通过 TCP 驱动 upgcmd Server：
+        \\1. 启动 upgcmd Server 并确认 `aiburnconfig.json`；
+        \\2. `.\flash-aiburn.ps1 -SdkRoot <luban-lite> -Monitor COM5`；
+        \\3. 日志/命令：`aiburn.py readlog`、`sendcmd`、`getstatus`。
+        \\注意：本 SDK 的 upgcmd.exe 没有 9100 server 模式，此路径需要厂商带 server 的版本。
+        \\
+        \\## GUI 方式（AiBurn）
         \\1. 模组进入 USB 下载模式（按住 BOOT/短接，复位后松开）。
-        \\2. 打开 AiBurn，选择 `{s}`，确认介质与分区表与 image_cfg.json 一致。
+        \\2. 打开厂商 AiBurn，选择 `{s}`，确认介质与分区表与 image_cfg.json 一致。
         \\3. 勾选“全片擦除/校验”，开始烧写；完成后复位。
-        \\
-        \\## UART（upgcmd）
-        \\1. 连接串口，进入升级模式。
-        \\2. `upgcmd -p <COMx> -f {s}`（参数以厂商工具版本为准）。
         \\
         \\## 自检
         \\- `manifest.txt` 里有每个组件的 SHA256 与分区大小检查结果；
         \\- 若某组件显示 `MISSING(optional)`，对应分区保持擦除状态，不影响启动。
         \\- 启动失败先查串口日志：SPL → env → os.itb 的 hash/签名校验。
         \\
-    , .{ img_name, img_name, img_name });
+    , .{ img_name, img_name, img_name, img_name });
     return w.toOwnedSlice();
+}
+
+fn aiburnConfigTemplate(allocator: std.mem.Allocator) ![]u8 {
+    return allocator.dupe(u8,
+        \\{
+        \\    "server": { "host": "localhost", "port": 9100 },
+        \\    "device": { "monitor_port": "", "baudrate": 115200 }
+        \\}
+        \\
+    );
+}
+
+fn aiburnScriptTemplate(allocator: std.mem.Allocator, img_name: []const u8) ![]u8 {
+    var w: std.Io.Writer.Allocating = .init(allocator);
+    errdefer w.deinit();
+    try w.writer.print(
+        \\param(
+        \\    [string]$SdkRoot = $env:LUBAN_LITE_ROOT,
+        \\    [string]$Monitor = "",
+        \\    [string]$ServerHost = "localhost",
+        \\    [int]$Port = 9100,
+        \\    [switch]$DryRun
+        \\)
+        \\$ErrorActionPreference = "Stop"
+        \\$script = $null
+        \\if (-not [string]::IsNullOrWhiteSpace($SdkRoot)) {{
+        \\    $script = Join-Path $SdkRoot "doc\skills\aiburn\scripts\aiburn.py"
+        \\}}
+        \\if (-not $script -or -not (Test-Path $script)) {{
+        \\    $repo = Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..") -ErrorAction SilentlyContinue
+        \\    if ($repo) {{
+        \\        $candidate = Join-Path $repo "docs\official\skills\aiburn\scripts\aiburn.py"
+        \\        if (Test-Path $candidate) {{ $script = $candidate }}
+        \\    }}
+        \\}}
+        \\if (-not $script -or -not (Test-Path $script)) {{
+        \\    throw "找不到 aiburn.py：请用 -SdkRoot 指向 luban-lite 根目录，或设置 LUBAN_LITE_ROOT"
+        \\}}
+        \\$image = Join-Path $PSScriptRoot "{s}"
+        \\$burnArgs = @("burn", "--image", $image, "--host", $ServerHost, "--port", "$Port")
+        \\if (-not [string]::IsNullOrWhiteSpace($Monitor)) {{ $burnArgs += @("--monitor", $Monitor) }}
+        \\if ($DryRun) {{ Write-Host ("python `"$script`" " + ($burnArgs -join " ")); exit 0 }}
+        \\Push-Location $PSScriptRoot
+        \\try {{
+        \\    & python $script @burnArgs
+        \\    exit $LASTEXITCODE
+        \\}} finally {{
+        \\    Pop-Location
+        \\}}
+        \\
+    , .{img_name});
+    return w.toOwnedSlice();
+}
+
+fn upgcmdScriptTemplate(allocator: std.mem.Allocator, img_name: []const u8) ![]u8 {
+    var w: std.Io.Writer.Allocating = .init(allocator);
+    errdefer w.deinit();
+    try w.writer.print(
+        \\param(
+        \\    [string]$Monitor = "COM5",
+        \\    [string]$Dev = "",
+        \\    [switch]$DryRun
+        \\)
+        \\$ErrorActionPreference = "Stop"
+        \\$repo = Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..") -ErrorAction SilentlyContinue
+        \\$exe = $null
+        \\if ($repo) {{ $exe = Join-Path $repo "wk\image\tools\upgcmd\upgcmd.exe" }}
+        \\if (-not $exe -or -not (Test-Path $exe)) {{
+        \\    throw "找不到 upgcmd：先运行 tools\fetch-upgcmd-deps.ps1 -SdkRoot <luban-lite>"
+        \\}}
+        \\$image = Join-Path $PSScriptRoot "{s}"
+        \\$burnArgs = @("-i", $image, "-p", "-v")
+        \\if (-not [string]::IsNullOrWhiteSpace($Dev)) {{
+        \\    $burnArgs += @("-d", $Dev)
+        \\}} else {{
+        \\    $burnArgs += @("-u", $Monitor)
+        \\}}
+        \\if ($DryRun) {{ Write-Host ("`"$exe`" " + ($burnArgs -join " ")); exit 0 }}
+        \\& $exe @burnArgs
+        \\exit $LASTEXITCODE
+        \\
+    , .{img_name});
+    return w.toOwnedSlice();
+}
+
+fn writeScriptWithBom(a: std.mem.Allocator, io: std.Io, path: []const u8, script: []const u8) !void {
+    // Windows PowerShell 5.1 按 ANSI 读取无 BOM 的 UTF-8 脚本，中文会破坏语法
+    const bytes = try a.alloc(u8, script.len + 3);
+    defer a.free(bytes);
+    bytes[0] = 0xEF;
+    bytes[1] = 0xBB;
+    bytes[2] = 0xBF;
+    @memcpy(bytes[3..], script);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+}
+
+fn writeAiburnAux(a: std.mem.Allocator, io: std.Io, out_dir: []const u8, img_name: []const u8) !void {
+    const cfg_text = try aiburnConfigTemplate(a);
+    defer a.free(cfg_text);
+    const cfg_path = try std.fs.path.join(a, &.{ out_dir, "aiburnconfig.json" });
+    defer a.free(cfg_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = cfg_path, .data = cfg_text });
+
+    const script = try aiburnScriptTemplate(a, img_name);
+    defer a.free(script);
+    const script_path = try std.fs.path.join(a, &.{ out_dir, "flash-aiburn.ps1" });
+    defer a.free(script_path);
+    try writeScriptWithBom(a, io, script_path, script);
+
+    const upg_script = try upgcmdScriptTemplate(a, img_name);
+    defer a.free(upg_script);
+    const upg_path = try std.fs.path.join(a, &.{ out_dir, "flash-upgcmd.ps1" });
+    defer a.free(upg_path);
+    try writeScriptWithBom(a, io, upg_path, upg_script);
 }
 
 /// 读取 payload、补齐可生成组件、校验并打包。返回的 packed 由调用者释放。
@@ -250,6 +388,7 @@ pub fn run(a: std.mem.Allocator, io: std.Io, opts: Options) !Result {
         try manifest.writer.print("\n# 缺少必填组件：\n", .{});
         for (missing_required.items) |n| try manifest.writer.print("#   {s}\n", .{n});
         const product_name = try std.fmt.allocPrint(a, "{s}.img", .{product});
+        try writeAiburnAux(a, io, opts.out_dir, product_name);
         return .{
             .manifest = try manifest.toOwnedSlice(),
             .instructions = try instructionsTemplate(a, product_name),
@@ -272,6 +411,8 @@ pub fn run(a: std.mem.Allocator, io: std.Io, opts: Options) !Result {
     defer a.free(sha);
     try manifest.writer.print("\n# firmware\t{s}\t{d}\t{s}\t-\tOK\n", .{ img_name, fw.len, sha });
 
+    try writeAiburnAux(a, io, opts.out_dir, img_name);
+
     return .{
         .manifest = try manifest.toOwnedSlice(),
         .instructions = try instructionsTemplate(a, img_name),
@@ -281,10 +422,4 @@ pub fn run(a: std.mem.Allocator, io: std.Io, opts: Options) !Result {
         .missing_required = 0,
     };
 }
-
-
-
-
-
-
 
