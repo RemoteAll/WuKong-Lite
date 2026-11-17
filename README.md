@@ -66,6 +66,9 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
   + `flash-upgcmd.ps1` / `flash-aiburn.ps1`。
 - **官方文档迁移**：`docs/official/` 收录 SDK 的 AIBURN 技能（含客户端脚本）与第三方许可证，
   见 `docs/FLASHING.md`。
+- **Zig 开发支持**：`docs/ZIG_ON_LUBAN_LITE.md` 记录 Zig 目标参数
+  （`riscv32-freestanding-none -mcpu=generic_rv32+d+f+c+a+m`，对应 D13x `rv32imafdc/ilp32d`）
+  与官方 Xuantie GCC 混链验证；示例在 `examples/zig_riscv/`。
 - **ELF 工具**：`wk image elf2aic`（按 PT_LOAD 展开为 AIC 可启动镜像）、
   `wk image elf2its`（按参考 `elf2image` 规则提取 `segN.bin` 并生成 ITS，XIP 段序交换）。
 
