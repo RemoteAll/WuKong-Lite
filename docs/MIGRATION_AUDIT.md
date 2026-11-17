@@ -29,6 +29,7 @@
 | `mkimage`（FIT/ITS） | `src/tools/fdt.zig`、`itb.zig`、`its.zig`、`fdt_reader.zig` | 逻辑树一致；hash 校验通过 |
 | `elf2image`（段提取/ITS） | `src/tools/elf2aic.zig` | 段哈希一致 |
 | `img2simg` | `src/tools/sparse.zig` | 11 组样本 + FAT 镜像逐字节一致 |
+| `simg_dump.py` | `wk image simg --dump` | 头部/chunk 表文本 + 单测（2026-11-17） |
 | `cpio -H crc` | `src/tools/cpio.zig` | 参考 cpio 可解包；结构一致 |
 | `openssl`（AES/RSA 子集） | `crypt.zig`、`rsa.zig` | AES 双向逐字节；RSA 与 openssl 互通 |
 | `upgcmd`（使用侧） | `tools/fetch-upgcmd-deps.ps1`、`flash-*.ps1` | `-e` 解析本仓库 AIC.FW |
@@ -42,7 +43,6 @@
 | `makefatfs.py` | FAT12/16、LFN、`--auto` 尺寸 | FAT32、`--fullpart`、AICF `dirent_*` 列表、`fatupdate` 的 used_size 口径 |
 | `mkcpio.py` | 基础 newc/crc 归档 | OTA `ota-subimgs.cfg` 解析、ota.cpio 尺寸回填、`ota-temp.cfg` 生成 |
 | `mkimage` 签名/加密 | 独立 RSA/AES 工具 | ITS `signature*`/`cipher` 节点、AIC 头 `sign_algo/encrypt_algo`/iv 区间联动 |
-| `simg_dump.py` | sparse 解析（代码内） | 没有 `simg_dump` 等价 CLI 输出 |
 | `aic_build.py` | Kconfig→build_plan→codegen | SCons 全量构建、链接脚本/工具链选择、镜像后处理流水线 |
 | 官方文档 | aiburn 技能 | `topics/` 464 篇、`images/`、`webhelp/` 未迁（体积原因，可按需） |
 | 板级方案 | 1 个 Kconfig 方案 | d12x/d21x/多板 `target` 与 `pack/image_cfg.json` |

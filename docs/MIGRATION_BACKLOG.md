@@ -24,7 +24,7 @@
 | P1-5 | `encrypt_rsa_key.py` | ⬜ | 参考脚本输出 | 与 P1-4 共用密钥封装 |
 | P1-6 | ITS `signature*`/`cipher` 节点 + AIC 头签名/加密联动 | 🟡 | `mkimage` 签名 FIT + 我们解析 | 独立 RSA/AES 已有；补节点生成与头字段 |
 | P1-7 | `mkcpio` OTA（`ota-subimgs.cfg`、`ota-temp.cfg`、尺寸回填） | 🟡 | 参考 `mkcpio.py` 产物 + cpio 解包 | 先做配置解析与 size 回填 |
-| P1-8 | `simg_dump` 等价 CLI | 🟡 | `simg_dump.py` 文本输出 | 在 `wk image simg --dump` 暴露现有解析器 |
+| P1-8 | `simg_dump` 等价 CLI | ✅ | `wk image simg --dump` 输出头/chunk 表，单测覆盖 | 2026-11-17 完成 |
 
 ## P2 · 主机辅助工具
 

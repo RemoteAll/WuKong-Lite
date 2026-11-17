@@ -143,6 +143,69 @@ pub fn toSparse(allocator: std.mem.Allocator, raw: []const u8, block_size: u32) 
     return out.toOwnedSlice(allocator);
 }
 
+/// 打印 sparse 头与 chunk 表（对应参考 `simg_dump.py -v` 的文本口径）。
+pub fn dump(writer: *std.Io.Writer, path: []const u8, data: []const u8) !void {
+    const h = try readHeader(data);
+    try writer.print("{s}: Total of {d} {d}-byte output blocks in {d} input chunks.\n", .{
+        path, h.total_blocks, h.block_size, h.total_chunks,
+    });
+    if (h.image_checksum != 0) {
+        try writer.print("checksum=0x{X:0>8}\n", .{h.image_checksum});
+    }
+    try writer.print("            input_bytes      output_blocks\n", .{});
+    try writer.print("chunk    offset     number  offset  number\n", .{});
+
+    var pos: usize = HEADER_SIZE;
+    var out_block: u32 = 0;
+    var i: u32 = 0;
+    while (i < h.total_chunks) : (i += 1) {
+        if (pos + CHUNK_HEADER_SIZE > data.len) return Error.Truncated;
+        const typ: u16 = std.mem.readInt(u16, data[pos..][0..2], .little);
+        const blocks = std.mem.readInt(u32, data[pos..][4..8], .little);
+        const total_sz = std.mem.readInt(u32, data[pos..][8..12], .little);
+        if (total_sz < CHUNK_HEADER_SIZE) return Error.BadChunk;
+        const data_sz = total_sz - CHUNK_HEADER_SIZE;
+        if (pos + total_sz > data.len) return Error.Truncated;
+
+        try writer.print("{d:4} {d:10} {d:10} {d:7} {d:7} ", .{
+            i + 1, pos + CHUNK_HEADER_SIZE, data_sz, out_block, blocks,
+        });
+
+        switch (typ) {
+            @backingInt(ChunkType.raw) => {
+                if (data_sz != blocks * h.block_size) return Error.BadChunk;
+                try writer.writeAll("Raw data\n");
+            },
+            @backingInt(ChunkType.fill) => {
+                if (data_sz != 4) return Error.BadChunk;
+                const fill = std.mem.readInt(u32, data[pos + CHUNK_HEADER_SIZE ..][0..4], .little);
+                try writer.print("Fill with 0x{X:0>8}\n", .{fill});
+            },
+            @backingInt(ChunkType.dont_care) => {
+                if (data_sz != 0) return Error.BadChunk;
+                try writer.writeAll("Don't care\n");
+            },
+            @backingInt(ChunkType.crc32) => {
+                if (data_sz != 4) return Error.BadChunk;
+                const crc = std.mem.readInt(u32, data[pos + CHUNK_HEADER_SIZE ..][0..4], .little);
+                try writer.print("Unverified CRC32 0x{X:0>8}\n", .{crc});
+            },
+            else => try writer.print("Unknown chunk type 0x{X:0>4}\n", .{typ}),
+        }
+
+        pos += total_sz;
+        out_block += blocks;
+    }
+
+    try writer.print("     {d:10}            {d:7}         End\n", .{ pos, out_block });
+    if (h.total_blocks != out_block) {
+        try writer.print("The header said we should have {d} output blocks, but we saw {d}\n", .{ h.total_blocks, out_block });
+    }
+    if (pos < data.len) {
+        try writer.print("There were {d} bytes of extra data at the end of the file.\n", .{data.len - pos});
+    }
+}
+
 /// sparse → raw（返回 total_blks * block_size 的展开数据，尾部补零）。
 pub fn fromSparse(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
     const header = try readHeader(data);
@@ -235,7 +298,28 @@ test "sparse：往返与头字段" {
     for (back[raw.len..]) |b| try std.testing.expectEqual(@as(u8, 0), b);
 }
 
+test "sparse：dump 头与 chunk 表" {
+    const allocator = std.testing.allocator;
+    const blk = 32;
+    var raw: [blk * 2]u8 = @splat(0);
+    raw[blk] = 0xAB;
+
+    const sparse = try toSparse(allocator, &raw, blk);
+    defer allocator.free(sparse);
+
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
+    try dump(&aw.writer, "x.simg", sparse);
+
+    const text = aw.written();
+    try std.testing.expect(std.mem.find(u8, text, "Total of 2 32-byte output blocks in 2 input chunks.") != null);
+    try std.testing.expect(std.mem.find(u8, text, "Fill with 0x00000000") != null);
+    try std.testing.expect(std.mem.find(u8, text, "Raw data") != null);
+    try std.testing.expect(std.mem.find(u8, text, "         End") != null);
+}
+
 test "sparse：坏 magic" {
     var buf: [28]u8 = @splat(0);
     try std.testing.expectError(error.BadMagic, readHeader(&buf));
 }
+

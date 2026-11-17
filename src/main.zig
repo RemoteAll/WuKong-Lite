@@ -140,6 +140,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image rsasign --input <file> --key <priv.pem> [-o sig.bin]
         \\  image rsaverify --input <file> --key <pub.pem> --sig <sig.bin>
         \\  image simg --input <raw> [--output <sparse>] [--block 4096] [--unsparse]
+        \\  image simg --input <sparse> --dump            # 打印头与 chunk 表
         \\  image cpio --list <file> --input-dir <dir> -o <ota.cpio> [--format crc|newc] [--mtime 0]
         \\  image flashpack [--config <image_cfg.json>] [--payload-dir <dir>] [--out-dir <dir>]
         \\  image dump <file>
@@ -949,6 +950,10 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         const input = getOpt(rest, "--input") orelse return error.MissingArgument;
         const data = try readBytes(io, aa, input);
         defer aa.free(data);
+        if (hasFlag(rest, "--dump")) {
+            try sparse.dump(out, input, data);
+            return;
+        }
         const unsparse = hasFlag(rest, "--unsparse");
 
         const result = if (unsparse)
