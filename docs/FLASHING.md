@@ -15,6 +15,12 @@ Luban-Lite 的官方烧写文档在 `doc/skills/aiburn/`，已原样迁移到
   （含 `uart_proto_layer.c`、`nor_fwc.c`、`nand_fwc.c` 等）。
 - **上位机客户端也是开源的**：`doc/skills/aiburn/scripts/aiburn/aicupg_client.py`（Apache-2.0），
   但它走 TCP 连 upgcmd Server，不是直接操作 USB/UART。
+- **官方仓库 `artinchip/tools`** 只有 GUI 烧写器安装包（AiBurn / AiBurnPro / AiBurnID），
+  没有 upgcmd 主机源码：
+  - <https://github.com/artinchip/tools>
+  - `AiBurnPro-0.1.8_setup.zip`（推荐 GUI）、`AiBurn-1.0.8_Setup_2023-08-08.zip`、
+    `AiBurnID-0.0.2_setup.zip`
+- 官方 `artinchip/luban-lite` 仓库里的 `aicupg` 也只有设备端（与本地 SDK 相同）。
 
 ## 一、准备可运行的 upgcmd（只需一次）
 

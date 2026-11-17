@@ -25,6 +25,8 @@
 ## 来源与许可证
 
 - 来源：ArtInChip Luban-Lite SDK（本机路径 `G:\Code\C\luban-lite`）。
+- 官方仓库：<https://github.com/artinchip/luban-lite>（设备端 aicupg 源码）、
+  <https://github.com/artinchip/tools>（AiBurn / AiBurnPro / AiBurnID 安装包）。
 - `skills/aiburn` 在 `SKILL.md` 中声明 `license: Apache-2.0`。
 - 其余第三方组件许可见 `LICENSE-3rd-party.txt`。
 - 迁移仅用于本仓库的离线参考与工具调用，未修改原文。
