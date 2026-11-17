@@ -69,6 +69,8 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
 - **文件拼接**：`wk image merge` 按 `--input` 顺序原样拼接（对应 `merge_files.py`）。
 - **链接地址**：`wk image linkaddr` 根据 `.config` 计算 bootloader `TEXT/LOAD` 地址，并替换
   `image_cfg.json` 的 4 个占位符（对应 `calc_linked_addr.py`）。
+- **链接尺寸**：`wk image linksize` 解析 `.map`，生成 `<base>.summary.csv`、`.detail.csv`、
+  `.dironly.csv`（对应 `linked_size.py`）。
 - **烧写包准备**：`wk image flashpack` 读取 image_cfg 与 payload 目录，校验 AIC/FIT、
   自动补 `env.bin`/`rodata.fatfs`、按分区大小检查，输出 AIC.FW + `manifest.txt` + `FLASH.md`
   + `flash-upgcmd.ps1` / `flash-aiburn.ps1`。
@@ -136,6 +138,7 @@ zig-out\bin\wk.exe image cpio --list ota-list.txt --input-dir out --output ota.c
 zig-out\bin\wk.exe image ota --ota-cfg pack/ota-subimgs.cfg --image-cfg pack/image_cfg.json --input-dir out --out-dir out
 zig-out\bin\wk.exe image merge --output merged.bin --input a.bin --input b.bin
 zig-out\bin\wk.exe image linkaddr --config .config --input pack/image_cfg.json --output pack/image_cfg.json
+zig-out\bin\wk.exe image linksize --map apps/hello_uart.map
 zig-out\bin\wk.exe image flashpack --payload-dir payload --out-dir flash
 powershell -File tools\fetch-upgcmd-deps.ps1 -SdkRoot <luban-lite>
 powershell -File flash\flash-upgcmd.ps1 -Monitor COM5

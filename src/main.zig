@@ -25,6 +25,7 @@ const cpio = aic.cpio;
 const merge = aic.merge;
 const ota = aic.ota;
 const linkaddr = aic.linkaddr;
+const linksize = aic.linksize;
 const flashpack = aic.flashpack;
 const fw_image = aic.fw_image;
 const image = aic.image;
@@ -148,6 +149,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image merge --output <file> --input <file> [--input <file> ...]
         \\  image ota --ota-cfg <ota-subimgs.cfg> --image-cfg <image_cfg.json> [--input-dir <dir>] [--out-dir <dir>]
         \\  image linkaddr --config <.config> --input <image_cfg.json> [--output <json>]
+        \\  image linksize --map <file.map> [--out-dir <dir>]
         \\  image flashpack [--config <image_cfg.json>] [--payload-dir <dir>] [--out-dir <dir>]
         \\  image dump <file>
         \\
@@ -1066,6 +1068,22 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         try writeText(io, output, rewritten);
         const v = linkaddr.calculate(config) catch unreachable;
         try out.print("linkaddr: text=0x{x} load=0x{x} -> {s}\n", .{ v.text, v.load, output });
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "linksize")) {
+        const map_path = getOpt(rest, "--map") orelse getOpt(rest, "-m") orelse return error.MissingArgument;
+        const out_dir = getOpt(rest, "--out-dir");
+        const result = linksize.run(aa, io, map_path, out_dir) catch |err| {
+            try out.print("linksize 失败：{s}\n", .{@errorName(err)});
+            return err;
+        };
+        defer {
+            aa.free(result.summary);
+            aa.free(result.detail);
+            aa.free(result.dironly);
+        }
+        try out.print("linksize: 已生成 <base>.summary.csv / .detail.csv / .dironly.csv\n", .{});
         return;
     }
 
