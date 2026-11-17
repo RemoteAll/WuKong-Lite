@@ -17,7 +17,7 @@
 
 | ID | 项目 | 状态 | 验证基线 | 下一步 |
 |----|------|------|----------|--------|
-| P1-1 | FAT32 / `--fullpart` / AICF `dirent_*` | 🟡 | FAT32 已用 `mcopy` 回读 hello.txt/sub/a.bin | FAT32 完成；`--fullpart` 与 AICF `dirent_*` 待做 |
+| P1-1 | FAT32 / `--fullpart` / AICF `dirent_*` | ✅ | FAT32 + fullpart 均用 `mcopy` 回读；AICF length=32、dirent=0 与参考一致 | 2026-11-17 完成 |
 | P1-2 | littlefs 镜像（`makelittlefs.py`） | ⬜ | 参考 `mklittlefs.exe` 产物逐字节/挂载回读 | 先解析参数与 superblock，再实现块分配 |
 | P1-3 | uffs 镜像（`makeuffs.py`） | ⬜ | 参考 `mkuffs.exe` 产物 | 依赖 littlefs 经验，排在 P1-2 后 |
 | P1-4 | `firmware_security_encrypt`（AES-XTS/nonce/tweak） | ⬜ | 参考 exe 加密结果逐字节 | 先确认密钥/nonce 派生与镜像布局 |

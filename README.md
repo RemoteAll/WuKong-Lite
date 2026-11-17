@@ -127,6 +127,7 @@ zig-out\bin\wk.exe image crypt --input kernel.bin --key 000102030405060708090a0b
 zig-out\bin\wk.exe image fitinfo --input os.itb --verify
 zig-out\bin\wk.exe image fat --input-dir rootfs --output data.img --size 8M --cluster 4 --label WKROOT
 zig-out\bin\wk.exe image fat --input-dir rootfs --output data32.img --size 16M --cluster 1 --label FAT32T --fat32
+zig-out\bin\wk.exe image fat --input-dir rootfs --output data.img --fullpart --cluster 4 --label WKROOT
 zig-out\bin\wk.exe image fat --input-dir rootfs --output data.img --auto --cluster 4 --label WKROOT
 zig-out\bin\wk.exe image rsasign --input os.bin --key rsa2048.pem -o os.sig
 zig-out\bin\wk.exe image rsaverify --input os.bin --key rsa2048_pub.pem --sig os.sig

@@ -139,7 +139,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image crypt --input <bin> --key <32hex> --iv <32hex> [--decrypt] [--pad zero|pkcs7] [-o out.bin]
         \\  image fitinfo --input <itb> [--dump] [--verify]
         \\  image fat --input-dir <dir> --output <img> --size <bytes> [--sector 512] [--cluster 8] [--label NAME]
-        \\          （--auto 可省略 --size，按内容估算，等价 makefatfs.py -a；--fat32 强制 FAT32）
+        \\          （--auto 可省略 --size，按内容估算，等价 makefatfs.py -a；--fullpart 读 partition_file_list.h；--fat32 强制 FAT32）
         \\  image rsasign --input <file> --key <priv.pem> [-o sig.bin]
         \\  image rsaverify --input <file> --key <pub.pem> --sig <sig.bin>
         \\  image simg --input <raw> [--output <sparse>] [--block 4096] [--unsparse]
@@ -861,8 +861,10 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         const input_dir = getOpt(rest, "--input-dir") orelse return error.MissingArgument;
         const output = getOpt(rest, "--output") orelse getOpt(rest, "-o") orelse return error.MissingArgument;
         const auto = hasFlag(rest, "--auto");
-        const size_text = getOpt(rest, "--size") orelse (if (auto) "0" else return error.MissingArgument);
-        const total_bytes = aic.utils.sizeStrToInt(size_text) catch return error.InvalidArgument;
+        const fullpart = hasFlag(rest, "--fullpart");
+        const size_text = getOpt(rest, "--size") orelse (if (auto or fullpart) "0" else return error.MissingArgument);
+        var total_bytes = aic.utils.sizeStrToInt(size_text) catch return error.InvalidArgument;
+        if (fullpart) total_bytes = @intCast(try partitionSizeForImage(io, aa, output));
         const sector: u16 = if (getOpt(rest, "--sector")) |v| @intCast(std.fmt.parseInt(usize, v, 0) catch return error.InvalidArgument) else 512;
         const cluster: u8 = if (getOpt(rest, "--cluster")) |v| @intCast(std.fmt.parseInt(usize, v, 0) catch return error.InvalidArgument) else 8;
 
@@ -1426,6 +1428,36 @@ fn readText(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 
 fn readBytes(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return readText(io, allocator, path);
+}
+
+fn partitionSizeForImage(io: std.Io, allocator: std.mem.Allocator, output: []const u8) !u64 {
+    const dir = std.fs.path.dirname(output) orelse ".";
+    const list_path = try std.fs.path.join(allocator, &.{ dir, "partition_file_list.h" });
+    defer allocator.free(list_path);
+    const text = readText(io, allocator, list_path) catch return error.MissingPartitionSize;
+    defer allocator.free(text);
+
+    const base = std.fs.path.basename(output);
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |raw| {
+        var cols: [3][]const u8 = undefined;
+        var ci: usize = 0;
+        var cit = std.mem.splitScalar(u8, raw, ',');
+        while (cit.next()) |part| : (ci += 1) {
+            if (ci < 3) cols[ci] = std.mem.trim(u8, part, " \t\r");
+        }
+        if (ci < 3) continue;
+        var name = std.mem.trim(u8, cols[1], " \t\r\"*");
+        for ([_][]const u8{ ".sparse.enc", ".sparse", ".enc" }) |suffix| {
+            if (std.mem.endsWith(u8, name, suffix)) {
+                name = name[0 .. name.len - suffix.len];
+                break;
+            }
+        }
+        if (!std.mem.eql(u8, name, base)) continue;
+        return std.fmt.parseInt(u64, cols[2], 0) catch return error.InvalidArgument;
+    }
+    return error.MissingPartitionSize;
 }
 
 fn ensureParentDir(io: std.Io, path: []const u8) !void {

@@ -31,6 +31,7 @@
 | `img2simg` | `src/tools/sparse.zig` | 11 组样本 + FAT 镜像逐字节一致 |
 | `simg_dump.py` | `wk image simg --dump` | 头部/chunk 表文本 + 单测（2026-11-17） |
 | `cpio -H crc` | `src/tools/cpio.zig` | 参考 cpio 可解包；结构一致 |
+| `makefatfs.py` | `src/tools/fat.zig` | FAT12/16/32、LFN、`--auto`、`--fullpart`；`mcopy` 回读通过（2026-11-17） |
 | `mkcpio.py`（OTA） | `src/tools/ota.zig`、`wk image ota` | 512B env + crc cpio + size 回填；`cpio.exe -it` 可列出（2026-11-17） |
 | `merge_files.py` | `src/tools/merge.zig`、`wk image merge` | 按序拼接，字节实测通过（2026-11-17） |
 | `calc_linked_addr.py` | `src/tools/linkaddr.zig`、`wk image linkaddr` | MEM_AUTO/显式 TEXT_BASE + 4 占位符替换；实测通过（2026-11-17） |
@@ -43,7 +44,6 @@
 
 | 官方 | 已做 | 缺口 |
 |------|------|------|
-| `makefatfs.py` | FAT12/16/32、LFN、`--auto` 尺寸、FAT32 FSInfo/备份引导 | `--fullpart`、AICF `dirent_*` 列表、`fatupdate` 的 used_size 口径 |
 | `mkimage` 签名/加密 | 独立 RSA/AES 工具 | ITS `signature*`/`cipher` 节点、AIC 头 `sign_algo/encrypt_algo`/iv 区间联动 |
 | `aic_build.py` | Kconfig→build_plan→codegen | SCons 全量构建、链接脚本/工具链选择、镜像后处理流水线 |
 | 官方文档 | aiburn 技能 | `topics/` 464 篇、`images/`、`webhelp/` 未迁（体积原因，可按需） |

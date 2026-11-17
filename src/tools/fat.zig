@@ -830,10 +830,12 @@ pub const Builder = struct {
         const info = img[0x80 .. 0x80 + 40];
         @memset(info, 0);
         @memcpy(info[0..4], "AICF");
-        std.mem.writeInt(u32, info[8..12], 40, .little);
+        std.mem.writeInt(u32, info[8..12], 32, .little); // length：Magic..used_size（不含 dirent 字段）
         std.mem.writeInt(u32, info[12..16], 0x0101, .little);
         std.mem.writeInt(u64, info[16..24], @intCast(l.total_sectors * l.sector_size), .little);
         std.mem.writeInt(u64, info[24..32], used_bytes, .little);
+        std.mem.writeInt(u32, info[32..36], 0, .little); // dirent_sect_id
+        std.mem.writeInt(u32, info[36..40], 0, .little); // dirent_data_len
 
         var sum: u32 = 0;
         var i: usize = 0;
@@ -908,6 +910,7 @@ test "FAT12 镜像：卷标、短名、LFN 与文件内容" {
 
     // AICF 信息块
     try std.testing.expectEqualStrings("AICF", img[0x80..0x84]);
+    try std.testing.expectEqual(@as(u32, 32), std.mem.readInt(u32, img[0x88..0x8C], .little));
     var sum: u32 = 0;
     var i: usize = 0;
     while (i < 40) : (i += 4) sum +%= std.mem.readInt(u32, img[0x80 + i ..][0..4], .little);
