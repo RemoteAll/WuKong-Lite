@@ -1,48 +1,43 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    把本机用户级指令（跨项目接续协议）字节级同步到所有已装备仓库的模板副本。
+    把本机用户级指令（已按技术栈拆分的多个 .instructions.md）字节级同步到所有已装备仓库的模板副本。
 
 .DESCRIPTION
-    唯一真相源：%APPDATA%\Code\User\prompts\跨项目接续协议.instructions.md
-    同步目标   ：<各仓库>\tools|Tools\continuity\templates\用户级指令.instructions.md
+    唯一真相源：%APPDATA%\Code\User\prompts\ 下的 5 个用户级文件
+      跨项目接续协议 / Rust项目规范 / 服务端与数据规范 / 前端规范 / Zig项目规范
+    同步目标   ：<各仓库>\tools|Tools\continuity\templates\<同名>.instructions.md
+    另：旧的单文件副本 `用户级指令.instructions.md` 会被覆盖成**索引文件**（指向上面 5 个），
+        保留是为了不打断仍引用它的脚本/文档，内容不再承载规则。
 
-    旧版本把 16 个仓库路径硬编码在脚本里，仓库一多就漏（2026-11-05 全盘扫到 110 个副本，
-    版本从 2026.10.10.4 到 2026.11.03.1 参差不齐）。本版改为**全盘扫描**：
-    先改本机副本 -> 跑本脚本 -> 所有副本字节一致 -> 各仓库自行 commit/push。
+    VS Code 侧按 applyTo 按需加载，本机 prompts 目录才是真正生效的地方；仓库副本用于跨机器回灌与审计。
 
     安全检查：
-      · 只覆盖「模板副本」，不碰本机副本自身；
-      · 覆盖前把旧内容备份到 _bak\<时间戳>\ 下（按序号 + 仓库名命名）。
+      · 只覆盖「模板副本」，不碰本机 prompts 目录；
+      · 覆盖前把旧内容备份到 _bak\<时间戳>\ 下；
+      · 版本守卫：仓库副本版本更高则拒绝覆盖（需显式 -AllowDowngrade）。
 
 .PARAMETER Roots
-    扫描根目录，默认覆盖 G:\Code 与 G:\Project。
+    扫描根目录，默认 E:\Code 与 G:\Code 与 G:\Project。
 
 .PARAMETER SkipBackup
     跳过备份（仅在已确认副本都在 git 仓库内、可随时还原时使用）。
 
 .PARAMETER Check
-    只巡检不写入：列出「比本机副本新」与「同版本不同内容」的副本，不修改任何文件。
-    退出码：0 = 全盘一致；1 = 有副本落后/同版本不同内容（需同步）；3 = 有副本比你新（本机副本是旧的，先回灌再改）。
+    只巡检不写入。退出码：0 = 全盘一致；1 = 有副本落后/同版本不同内容；3 = 有副本比本机新。
 
 .PARAMETER AllowDowngrade
-    允许用较旧的本机副本覆盖较新的仓库副本（危险，仅在你确认要回退时用）。
+    允许用较旧的本机副本覆盖较新的仓库副本（危险）。
 
 .EXAMPLE
-    .\_sync-user-instruction.ps1
-
-.EXAMPLE
-    .\_sync-user-instruction.ps1 -Check
-
-.EXAMPLE
-    .\_sync-user-instruction.ps1 -Roots 'G:\Code\Rust'
+    .\_sync-user-instruction.ps1 -Check -Roots 'E:\Code'
 
 .NOTES
-    版本：2026.11.08.1（新增版本守卫与 -Check；旧副本不得覆盖新副本）
+    版本：2026.11.12.3（支持拆分后的多文件；旧版只同步单文件）
 #>
 [CmdletBinding()]
 param(
-    [string[]]$Roots = @('G:\Code', 'G:\Project'),
+    [string[]]$Roots = @('E:\Code', 'G:\Code', 'G:\Project'),
     [switch]$SkipBackup,
     [switch]$Check,
     [switch]$AllowDowngrade
@@ -50,28 +45,25 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$source = Join-Path $env:APPDATA 'Code\User\prompts\跨项目接续协议.instructions.md'
-if (-not (Test-Path $source)) {
-    Write-Host "未找到本机副本：$source" -ForegroundColor Red
-    exit 2
-}
-
-$srcVer = ([regex]::Match([IO.File]::ReadAllText($source, [Text.Encoding]::UTF8), '版本：([0-9.]+)')).Groups[1].Value
-$srcHash = (Get-FileHash $source -Algorithm SHA256).Hash
-Write-Host "源：$source"
-Write-Host "版本：$srcVer"
-Write-Host "SHA256：$srcHash"
-Write-Host ''
+$UserNames = @(
+    '跨项目接续协议',
+    'Rust项目规范',
+    '服务端与数据规范',
+    '前端规范',
+    'Zig项目规范'
+)
+$LegacyName = '用户级指令'
+$promptsDir = Join-Path $env:APPDATA 'Code\User\prompts'
+$VerPattern = '版本：(\d{4}\.\d{2}\.\d{2}\.\d+)'
 
 function Get-FileVersion([string]$path) {
     $text = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
-    $m = [regex]::Match($text, '版本：([0-9]+(?:\.[0-9]+)*)')
-    if ($m.Success) { return $m.Groups[1].Value }
-    return ''
+    $ms = [regex]::Matches($text, $VerPattern)
+    if ($ms.Count -eq 0) { return '' }
+    return $ms[$ms.Count - 1].Groups[1].Value
 }
 
 function Test-VersionNewer([string]$a, [string]$b) {
-    # $a 比 $b 新则返回 $true（分段数值比较）
     $pa = @(); if ($a) { $pa = $a.Split('.') | ForEach-Object { [int]$_ } }
     $pb = @(); if ($b) { $pb = $b.Split('.') | ForEach-Object { [int]$_ } }
     $n = [Math]::Max($pa.Count, $pb.Count)
@@ -85,22 +77,88 @@ function Test-VersionNewer([string]$a, [string]$b) {
     return $false
 }
 
-# ---- 全盘扫描模板副本 ----
-$targets = @()
+# ---- 组装源清单 ----
+$sources = @()
+foreach ($n in $UserNames) {
+    $path = Join-Path $promptsDir "$n.instructions.md"
+    if (-not (Test-Path $path)) {
+        Write-Host "未找到本机用户级指令：$path" -ForegroundColor Red
+        exit 2
+    }
+    $sources += [pscustomobject]@{
+        Name = $n
+        Path = $path
+        Ver  = (Get-FileVersion $path)
+        Hash = (Get-FileHash $path -Algorithm SHA256).Hash
+    }
+}
+
+$verSet = @($sources | ForEach-Object { $_.Ver } | Sort-Object -Unique)
+if ($verSet.Count -ne 1 -or -not $verSet[0]) {
+    Write-Host ("各文件版本号不一致或缺失：{0} —— 请先统一版本号。" -f ($verSet -join ', ')) -ForegroundColor Red
+    exit 2
+}
+$srcVer = $verSet[0]
+
+$indexBody = @"
+# 用户级指令（已按技术栈拆分）
+
+本目录下的用户级规则已拆成多个 ``.instructions.md``，逐个文件才是真相源：
+
+| 文件 | 覆盖范围 |
+|---|---|
+| 跨项目接续协议.instructions.md | 接续流程、上下文成本、复用纪律、实测优先、日志、回归门槛、资源带宽（``applyTo: **``） |
+| Rust项目规范.instructions.md | 编译提速、打包发版、国内镜像、源码拉新、检索词表 |
+| 服务端与数据规范.instructions.md | HTTP/WAF、登录口令、数据库连接命名、Pek.RCode |
+| 前端规范.instructions.md | 面板弹窗、后台配置页 |
+| Zig项目规范.instructions.md | 异步与并发、串口/硬件调测 |
+
+本文件仅作索引，不再承载规则。
+
+<!-- 版本：2026.11.12.3（兼容存根；真实规则见 5 个拆分文件） -->
+"@
+$indexPath = Join-Path $env:TEMP 'user-instruction-index.instructions.md'
+[IO.File]::WriteAllText($indexPath, $indexBody, (New-Object Text.UTF8Encoding $false))
+$sources += [pscustomobject]@{
+    Name = $LegacyName
+    Path = $indexPath
+    Ver  = $srcVer
+    Hash = (Get-FileHash $indexPath -Algorithm SHA256).Hash
+}
+
+Write-Host "用户级指令：$($UserNames.Count) 个文件 + 1 个索引"
+Write-Host "版本：$srcVer"
+foreach ($s in $sources) { Write-Host ("  {0,-20} {1}" -f $s.Name, $s.Hash.Substring(0, 12)) }
+Write-Host ''
+
+# ---- 全盘扫描：先找 continuity\templates 目录，再按 6 个文件名生成目标（缺失的也要建） ----
+$templateDirs = @()
 foreach ($r in $Roots) {
     if (-not (Test-Path $r)) { continue }
-    $targets += Get-ChildItem $r -Recurse -Filter '用户级指令.instructions.md' -File -ErrorAction SilentlyContinue
+    $templateDirs += Get-ChildItem $r -Recurse -Directory -Filter 'templates' -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match 'continuity' }
 }
-$targets = $targets | Sort-Object FullName -Unique
+$templateDirs = @($templateDirs | Sort-Object FullName -Unique)
 
-if (-not $targets) {
+$targets = @()
+foreach ($d in $templateDirs) {
+    foreach ($n in ($UserNames + $LegacyName)) {
+        $full = Join-Path $d.FullName "$n.instructions.md"
+        $targets += [pscustomobject]@{
+            FullName = $full
+            Name     = "$n.instructions.md"
+            Exists   = (Test-Path $full)
+        }
+    }
+}
+
+if ($targets.Count -eq 0) {
     Write-Host '未找到任何模板副本（检查 -Roots）。' -ForegroundColor Yellow
     exit 1
 }
 
-# ---- 备份目录（放临时目录，不污染仓库工作区） ----
 $bakDir = $null
-if (-not $SkipBackup) {
+if (-not $SkipBackup -and -not $Check) {
     $bakDir = Join-Path $env:TEMP ("continuity-bak\" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
     New-Item -ItemType Directory -Path $bakDir -Force | Out-Null
 }
@@ -110,15 +168,31 @@ $skipped = 0
 $newer = @()
 $sameVerDiff = @()
 $older = @()
+$unmatched = @()
 $i = 0
+
 foreach ($f in $targets) {
     $i++
+    $leaf = $f.Name -replace '\.instructions\.md$', ''
+    $src = @($sources | Where-Object { $_.Name -eq $leaf }) | Select-Object -First 1
+    if (-not $src) { $unmatched += $f.FullName; continue }
+
+    if (-not $f.Exists) {
+        if ($Check) {
+            $older += [pscustomobject]@{ Path = $f.FullName; Ver = '(缺失)' }
+        } else {
+            Copy-Item $src.Path $f.FullName -Force
+            $changed++
+            if ($changed -le 40) { Write-Host "  新建 $($f.FullName)" }
+        }
+        continue
+    }
+
     $h = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
-    if ($h -eq $srcHash) { $skipped++; continue }
+    if ($h -eq $src.Hash) { $skipped++; continue }
 
     $v = Get-FileVersion $f.FullName
     if (Test-VersionNewer $v $srcVer) {
-        # 守卫：仓库副本比本机新 -> 绝不覆盖（本机副本才是过期的那个）
         $newer += [pscustomobject]@{ Path = $f.FullName; Ver = $v }
         Write-Host ("  [较新，未覆盖] $($f.FullName)  ver=$v > src=$srcVer") -ForegroundColor Yellow
         if (-not $AllowDowngrade) { continue }
@@ -132,23 +206,24 @@ foreach ($f in $targets) {
 
     if ($bakDir) {
         $repo = Split-Path (Split-Path (Split-Path (Split-Path $f.FullName)))
-        $name = Split-Path $repo -Leaf
-        $bak = Join-Path $bakDir ("{0:d3}_{1}.md" -f $i, $name)
+        $repoName = Split-Path $repo -Leaf
+        $bak = Join-Path $bakDir ("{0:d3}_{1}_{2}.md" -f $i, $repoName, $leaf)
         Copy-Item $f.FullName $bak -Force
     }
 
-    Copy-Item $source $f.FullName -Force
+    Copy-Item $src.Path $f.FullName -Force
     $changed++
-    Write-Host "  更新 $($f.FullName)"
+    if ($changed -le 40) { Write-Host "  更新 $($f.FullName)" }
 }
 
 Write-Host ''
 if ($Check) {
     Write-Host "巡检 $($targets.Count) 个副本：一致 $skipped 个，落后 $($older.Count) 个，同版本不同内容 $($sameVerDiff.Count) 个，**比本机新 $($newer.Count) 个**。"
-    foreach ($n in $newer) { Write-Host "  [本机副本过期] $($n.Path)  ver=$($n.Ver)" -ForegroundColor Yellow }
-    foreach ($d in $sameVerDiff) { Write-Host "  [同版本内容不同] $($d.Path)" -ForegroundColor Yellow }
+    foreach ($x in $newer) { Write-Host "  [本机副本过期] $($x.Path)  ver=$($x.Ver)" -ForegroundColor Yellow }
+    foreach ($x in $sameVerDiff) { Write-Host "  [同版本内容不同] $($x.Path)" -ForegroundColor Yellow }
+    if ($unmatched.Count -gt 0) { Write-Host "  [无对应源，已跳过] $($unmatched.Count) 个" -ForegroundColor Yellow }
     if ($newer.Count -gt 0) {
-        Write-Host '结论：本机副本不是最新的 —— 先把最新副本回灌到本机（备份本机后合并），再递增版本号同步。' -ForegroundColor Red
+        Write-Host '结论：本机副本不是最新的 —— 先回灌本机再递增版本号。' -ForegroundColor Red
         exit 3
     }
     if (($sameVerDiff.Count + $older.Count) -gt 0) {
@@ -161,18 +236,16 @@ if ($Check) {
 
 Write-Host "扫描 $($targets.Count) 个副本：更新 $changed 个，已一致 $skipped 个。"
 if ($newer.Count -gt 0) {
-    Write-Host "拒绝降级：$($newer.Count) 个副本比本机副本新，已保留原样（本机版本 $srcVer）。" -ForegroundColor Red
-    Write-Host '请先把最新副本回灌到本机并合并，递增版本号后重跑本脚本；确需回退请显式加 -AllowDowngrade。' -ForegroundColor Red
+    Write-Host "拒绝降级：$($newer.Count) 个副本比本机新，已保留原样（本机 $srcVer）。" -ForegroundColor Red
 }
 
-$hashes = $targets | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash }
-$uniq = ($hashes | Sort-Object -Unique).Count
-Write-Host "哈希去重数：$uniq / 文件数 $($hashes.Count)"
-$localHash = (Get-FileHash $source -Algorithm SHA256).Hash
-$allMatch = -not ($hashes | Where-Object { $_ -ne $localHash })
-Write-Host ("与本机副本完全一致：" + $(if ($allMatch) { '是' } else { '否（仍有差异）' })) -ForegroundColor $(if ($allMatch) { 'Green' } else { 'Red' })
+$srcHashes = @($sources | ForEach-Object { $_.Hash } | Sort-Object -Unique)
+$dstHashes = @($targets | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash } | Sort-Object -Unique)
+$extra = @($dstHashes | Where-Object { $srcHashes -notcontains $_ })
+Write-Host ("副本哈希种类：{0} / 源哈希种类：{1}" -f $dstHashes.Count, $srcHashes.Count)
+Write-Host ("与本机完全一致：" + $(if ($extra.Count -eq 0) { '是' } else { '否（有副本内容不在源集合里）' })) -ForegroundColor $(if ($extra.Count -eq 0) { 'Green' } else { 'Red' })
 if ($bakDir) { Write-Host "旧副本备份：$bakDir" }
 
 if ($newer.Count -gt 0) { exit 3 }
-if (-not $allMatch) { exit 1 }
+if ($extra.Count -gt 0) { exit 1 }
 exit 0

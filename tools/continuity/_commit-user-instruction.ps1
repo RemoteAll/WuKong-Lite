@@ -60,22 +60,31 @@ $msgFile = Join-Path $env:TEMP "continuity-commit-$([guid]::NewGuid().ToString('
 $copies = @()
 foreach ($r in $Roots) {
     if (-not (Test-Path $r)) { continue }
-    $copies += Get-ChildItem $r -Recurse -Filter '用户级指令.instructions.md' -File -ErrorAction SilentlyContinue
+    $copies += Get-ChildItem $r -Recurse -Filter '*.instructions.md' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match 'continuity\\templates\\' }
 }
 
 $results = @()
+$copies = @($copies | Sort-Object FullName -Unique)
+$doneRepos = @{}
 foreach ($c in $copies) {
     $d = $c.Directory
     while ($d -and -not (Test-Path (Join-Path $d.FullName '.git'))) { $d = $d.Parent }
     if (-not $d) { $results += [pscustomobject]@{ Repo = $c.FullName; Status = '无 git'; Detail = '' }; continue }
 
     $repo = $d.FullName
+    if ($doneRepos.ContainsKey($repo)) { continue }
+    $doneRepos[$repo] = $true
     $rel = $c.FullName.Substring($repo.Length).TrimStart('\')
+    $rel = ($rel -replace '\\[^\\]+$', '')
+    $paths = @($rel)
+    $installerRel = Join-Path (Split-Path $rel -Parent) 'install-global-instruction.ps1'
+    if (Test-Path (Join-Path $repo $installerRel)) { $paths += $installerRel }
 
-    $st = Invoke-Native 'git' @('-C', $repo, 'status', '--porcelain', '--', $rel)
+    $st = Invoke-Native 'git' (@('-C', $repo, 'status', '--porcelain', '--') + $paths)
     if (-not $st.Output.Trim()) { $results += [pscustomobject]@{ Repo = $repo; Status = '无改动'; Detail = '' }; continue }
 
-    $add = Invoke-Native 'git' @('-C', $repo, 'add', '--', $rel)
+    $add = Invoke-Native 'git' (@('-C', $repo, 'add', '--') + $paths)
     if ($add.ExitCode -ne 0) { $results += [pscustomobject]@{ Repo = $repo; Status = 'add 失败'; Detail = $add.Output.Trim() }; continue }
 
     $ci = Invoke-Native 'git' @('-C', $repo, 'commit', '-F', $msgFile)
