@@ -49,7 +49,9 @@ Set-Content (Join-Path $dst 'rtconfig.py') -Value $t -Encoding UTF8
 # 4) 构建 bootloader（生成 image_cfg 的 load/entry 与 bootloader.bin）
 cd $dst
 $env:RTT_EXEC_PATH=(Resolve-Path 'toolchain\bin').Path
-$env:PATH='G:\Code\C\luban-lite\tools\env\tools\bin;' + $env:PATH
+# 旧 MSYS 的 echo/ls 在本机会挂起：echo 无参数时等 stdin，ls 也会长时间不退出。
+# 让 Git 自带的 MSYS2 工具优先，并用 build/toolbin/echo.exe 垫片处理空 echo。
+$env:PATH='G:\Code\Zig\WuKong-Lite\build\toolbin;D:\Program Files\Git\usr\bin;G:\Code\C\luban-lite\tools\env\tools\bin;' + $env:PATH
 python -m SCons --apply-def=28
 python -m SCons -j8
 
@@ -81,6 +83,31 @@ wk image pack --config <images>/image_cfg.json --datadir <images> -o zig-pack.im
 2026-11-18 实测：两边均为 `12,263,936` 字节，`DIFF=0`（逐字节完全一致）。
 因此当前可以确认：**AIC.FW 封装格式与 C 版对齐**；但不能据此说
 “设备侧固件已用 Zig 实现”——bootloader/OS/LVGL 仍是 C 代码。
+
+## 2.2 构建长时间无输出 / 看起来卡住
+
+实测有两个独立原因，不是编译慢：
+
+1. **输出被管道缓存**：`... | Select-Object -Last 14` 要等 SCons 全部结束才打印，
+   构建期间终端必然空白。改用 `Tee-Object` 边跑边输出。
+2. **旧 MSYS 工具挂起**：`tools/env/tools/bin` 里的 `echo.exe` 在 `@echo`（无参数）时
+   等 stdin；`ls.exe -og ...` 在本机也会长时间不退出。SCons 的 POST_ACTION 末尾正好有
+   裸 `@echo`，于是构建在最后一步“卡住”。
+
+处理：
+
+```powershell
+# 1) 编译一个立即退出的 echo 垫片（只需一次）
+zig build-exe tools/echo_stub.zig -target x86_64-windows -O ReleaseSmall -fstrip -femit-bin=build/toolbin/echo_stub
+Move-Item build/toolbin/echo_stub build/toolbin/echo.exe -Force
+
+# 2) 把垫片与 Git 的 MSYS2 工具放在旧 MSYS 工具之前
+$env:PATH='G:\Code\Zig\WuKong-Lite\build\toolbin;D:\Program Files\Git\usr\bin;G:\Code\C\luban-lite\tools\env\tools\bin;' + $env:PATH
+python -m SCons -j8 -Q 2>&1 | Tee-Object -FilePath artifacts\build-last.log
+```
+
+`BUILD=-1` / `SCONS_EXIT=-1` 只说明进程被结束或被管道干扰；判断成功看
+`Luban-Lite is built successfully` 和最终 `.img` 的时间戳。
 
 
 ## 3. 烧录

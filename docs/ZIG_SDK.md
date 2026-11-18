@@ -49,7 +49,8 @@ powershell -ExecutionPolicy Bypass -File tools\attach-zig-sdk.ps1
 cd build\luban-lite
 $env:WK_REPO='G:\Code\Zig\WuKong-Lite'
 $env:RTT_EXEC_PATH=(Resolve-Path 'toolchain\bin').Path
-$env:PATH='G:\Code\C\luban-lite\tools\env\tools\bin;' + $env:PATH
+# 旧 MSYS echo/ls 会挂起；优先用 Git 的 MSYS2 工具 + 空 echo 垫片。
+$env:PATH='G:\Code\Zig\WuKong-Lite\build\toolbin;D:\Program Files\Git\usr\bin;G:\Code\C\luban-lite\tools\env\tools\bin;' + $env:PATH
 python -m SCons -j8
 ```
 
@@ -57,27 +58,35 @@ python -m SCons -j8
 
 1. 把官方 `application/` 复制到构建工作区（首次从目录联接切为真实副本）；
 2. 在 `application/rt-thread/helloworld/zig_sdk/` 放入 SConscript，
-   把 `libwksdk.a` 追加到链接库；
+   把 `libwksdk.a` 追加到链接库，并加 `-Wl,--wrap=lv_user_gui_init`；
 3. 在 `main.c` 的 `main()` 开头调用 `wk_sdk_demo()`。
+
+Zig 侧导出 `__wrap_lv_user_gui_init()`：官方 LVGL 线程在 `lv_init()`、
+`lv_port_disp_init()` 之后调用 `lv_user_gui_init()`，链接器把它改接到 Zig 包装函数；
+包装函数先调用 `__real_lv_user_gui_init()`，再在 **LVGL 顶层图层** 创建 Label。
+这样不会在 LVGL 初始化之前调用 `lv_timer_create()`（那会访问未初始化的
+`timer_ll_p`，启动即异常）。
 
 ## 5. 已验证
 
-- 构建成功，最终镜像仍为 12,263,936 B；
-- `d13x.elf` 中存在 `wk_sdk_demo`、`wk_sdk_version` 符号；
-- `d13x.bin` 中存在 3 处 `[zig-sdk]` 日志字符串；
-- `d13x.bin` 中存在 `Hello from Zig SDK`，Zig 通过 `lv_timer_create` 在 LVGL 线程
-  上下文创建并居中显示 Label；
+- 构建成功，最终镜像为 12,265,984 B；
+- `d13x.elf` 中存在 `__wrap_lv_user_gui_init`，且 `lvgl_thread_entry` 的调用已重定向到它；
+- `d13x.bin` 中存在 7 处 `[zig-sdk]` 日志字符串；
+- `d13x.bin` 中存在 `Hello from Zig SDK`；Zig 在 LVGL 顶层图层创建并居中显示 Label，
+  不会被 `demo_hub` 的页面遮住；
+- 已移除启动早期 `lv_timer_create()`，避免 LVGL 未初始化时崩溃；
 - LVGL 官方 demo_hub 仍由官方 C 代码初始化，Zig 只追加自己的 Label。
 
 含 Zig SDK 的镜像：
 
 ```text
 artifacts/lvgl-firmware/d13x_demo88-nor_zig_v1.0.0.img
-大小：12,263,936 B
-SHA256：B46EF447896888C6FE163BBB29557922DC6A0FECFBF98D23350AC4DBAA05FFCD
+大小：12,265,984 B
+SHA256：EC8329B7BE44A4A78A8110542CF911EF5B3188C3A840EA3359507B4748FD0168
 ```
 
-`upgcmd -e` 已验证可解析全部组件。
+`upgcmd -e` 已验证可解析全部 9 个组件。烧写与现场排查见
+`docs/FLASH_ZIG_FIRMWARE.md`。
 
 > 注意：加了 Zig SDK 后，镜像不再与纯 C 版逐字节相同（这是预期差异）；
 > 纯 C 版与 Zig 打包版的 `DIFF=0` 对比见 `docs/LVGL_FIRMWARE.md` 2.1 节。

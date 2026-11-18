@@ -1,12 +1,25 @@
 //! Zig SDK 示例入口：由官方 C 应用调用 `wk_sdk_demo()`。
 const sdk = @import("sdk.zig");
 
-fn createZigUi(timer: ?*sdk.lvgl.Timer) callconv(.c) void {
-    const screen = sdk.lvgl.screenActive() orelse return;
-    const label = sdk.lvgl.lv_label_create(screen) orelse return;
+/// 官方 LVGL 移植层在 LVGL 线程里调用 `lv_user_gui_init()`。
+/// 链接时用 `-Wl,--wrap=lv_user_gui_init` 把这次调用转到 Zig 包装函数，
+/// 从而保证 Zig 的控件操作发生在 LVGL 线程上下文、且 `lv_init()` 已完成。
+extern fn __real_lv_user_gui_init() void;
+
+pub export fn __wrap_lv_user_gui_init() void {
+    __real_lv_user_gui_init();
+
+    const top = sdk.lvgl.layerTop() orelse {
+        sdk.rt.print("[zig-sdk] LVGL top layer is null, skip Zig UI\r\n", .{});
+        return;
+    };
+    const label = sdk.lvgl.lv_label_create(top) orelse {
+        sdk.rt.print("[zig-sdk] lv_label_create failed\r\n", .{});
+        return;
+    };
     sdk.lvgl.lv_label_set_text(label, "Hello from Zig SDK\nWuKong-Lite + LVGL V9");
     sdk.lvgl.center(label);
-    sdk.lvgl.lv_timer_delete(timer);
+    sdk.rt.print("[zig-sdk] Zig Label created on LVGL top layer\r\n", .{});
 }
 
 pub export fn wk_sdk_demo() void {
@@ -16,9 +29,7 @@ pub export fn wk_sdk_demo() void {
         sdk.rt.rt_tick_get(),
         sdk.rt.rt_tick_get_millisecond(),
     });
-
-    // 在 LVGL 线程上下文创建 Label（定时器回调由 lv_timer_handler 调度）。
-    _ = sdk.lvgl.lv_timer_create(createZigUi, 300, null);
+    sdk.rt.print("[zig-sdk] waiting for LVGL thread to call lv_user_gui_init\r\n", .{});
 }
 
 /// 可选：把 Zig 的版本号暴露给 C。

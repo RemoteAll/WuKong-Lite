@@ -12,6 +12,7 @@ pub const ALIGN_CENTER: u32 = 9;
 
 pub extern fn lv_display_get_default() ?*Display;
 pub extern fn lv_display_get_screen_active(disp: ?*Display) ?*Obj;
+pub extern fn lv_display_get_layer_top(disp: ?*Display) ?*Obj;
 
 pub extern fn lv_obj_create(parent: ?*Obj) ?*Obj;
 pub extern fn lv_obj_set_pos(obj: ?*Obj, x: i32, y: i32) void;
@@ -28,6 +29,11 @@ pub extern fn lv_timer_handler() u32;
 /// `lv_screen_active()` 是头文件内联函数，这里展开成两次底层调用。
 pub fn screenActive() ?*Obj {
     return lv_display_get_screen_active(lv_display_get_default());
+}
+
+/// `lv_layer_top()` 是头文件内联函数；顶层图层不会被 demo_hub 的页面遮住。
+pub fn layerTop() ?*Obj {
+    return lv_display_get_layer_top(lv_display_get_default());
 }
 
 /// `lv_obj_center()` 的底层等价调用。
