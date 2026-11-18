@@ -1,10 +1,10 @@
 # 迁移全量审计（WuKong-Lite ↔ Luban-Lite）
 
-- 审计日期：2026-11-17
+- 审计日期：2026-11-18
 - 参考实现：`G:\Code\C\luban-lite`（Luban-Lite SDK，官方仓库 `artinchip/luban-lite`）
 - 被审计仓库：`G:\Code\Zig\WuKong-Lite`
 - 结论：**主机侧“镜像格式 + 打包/校验工具链”基本覆盖；设备侧（bootloader/RTOS/HAL）
-  与部分主机工具（littlefs/uffs/PBP/SPIENC/OTA）尚未迁移。**
+  与部分主机工具（uffs/PBP/SPIENC/OTA）尚未迁移。**
 
 ## 1. 总览
 
@@ -38,6 +38,7 @@
 | `linked_size.py` | `src/tools/linksize.zig`、`wk image linksize` | summary/detail/dironly CSV；hello_uart.map 与参考 summary 一致（2026-11-17） |
 | `gen_partition_file_list.py` | `src/tools/partlist.zig`、`wk image partlist` | D13x 配置输出 6 项与参考完全一致（2026-11-18） |
 | `partition_check.py` | `src/tools/partcheck.zig`、`wk image partcheck` | 50%/125% 样本表格与 `--strict` 退出码同参考；jffs2/UBI 规则已覆盖（2026-11-18） |
+| `makelittlefs.py` | `src/tools/littlefs.zig`、`wk image littlefs` | 复用上游 littlefs 2.5；`mklittlefs -l/-u` 验证多文件/嵌套内容一致（2026-11-18） |
 | `openssl`（AES/RSA 子集） | `crypt.zig`、`rsa.zig` | AES 双向逐字节；RSA 与 openssl 互通 |
 | `upgcmd`（使用侧） | `tools/fetch-upgcmd-deps.ps1`、`flash-*.ps1` | `-e` 解析本仓库 AIC.FW |
 | Kconfig/defconfig/codegen | `kconfig.zig`、`codegen.zig`、`modules.zig` | 单测覆盖 |
@@ -62,7 +63,7 @@
 - **烧写协议**：主机端 `upgcmd` 源码（内部 `aicupg`）、USB/UART 协议实现。
 
 ### P1：镜像与安全能力
-- 文件系统镜像：`makelittlefs.py`、`makeuffs.py`（littlefs/uffs）；
+- 文件系统镜像：`makeuffs.py`（uffs）；
 - 固件加密：`firmware_security_encrypt`（含 nonce/tweak 的 AES-XTS 类流程）、
   `encrypt_rsa_key.py`、SPIENC/eFuse 安全启动；
 - `mkimage` 的 RSA/SM2 签名节点、公钥内嵌、`-K` 更新 dtb；
@@ -90,7 +91,7 @@
 - **建议优先级**：
   1. （如可获取）接入厂商 `aicupg` 主机源码，替换预编译 upgcmd；
   2. 按开源设备端 `lib/aicupg` 实现 UART 主机客户端（无 DLL 依赖）；
-  3. 补 littlefs/uffs 与 FAT32，覆盖剩余镜像类型；
+  3. 补 uffs 与 SPIENC/PBP 镜像类型；
   4. 按板卡逐步补 HAL（先 UART/GPIO/时钟，再存储/显示）。
 
 ## 6. 审计复现命令

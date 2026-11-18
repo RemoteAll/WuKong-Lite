@@ -75,6 +75,9 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
   `<partition>,<file>,<partition_size>` 清单（对应 `gen_partition_file_list.py`）。
 - **分区占用检查**：`wk image partcheck -c <cfg> -d <dir>` 输出占用表（对应
   `partition_check.py`）；`.jffs2` 按擦除块内容计算、UBI 卷优先取卷大小，`--strict` 时溢出返回非零。
+- **littlefs 镜像**：`wk image littlefs -i <dir> -o <image.lfs> -b <block>` 生成 littlefs 2.x
+  镜像（对应 `makelittlefs.py`）；复用 `third_party/littlefs` 上游实现，自动按
+  `partition_file_list.h`/NFTL 保留区计算大小并裁剪尾部 `0xFF`。
 - **烧写包准备**：`wk image flashpack` 读取 image_cfg 与 payload 目录，校验 AIC/FIT、
   自动补 `env.bin`/`rodata.fatfs`、按分区大小检查，输出 AIC.FW + `manifest.txt` + `FLASH.md`
   + `flash-upgcmd.ps1` / `flash-aiburn.ps1`。
@@ -145,6 +148,7 @@ zig-out\bin\wk.exe image linkaddr --config .config --input pack/image_cfg.json -
 zig-out\bin\wk.exe image linksize --map apps/hello_uart.map
 zig-out\bin\wk.exe image partlist --config pack/image_cfg.json --output pack/partition_file_list.h
 zig-out\bin\wk.exe image partcheck -c pack/image_cfg.json -d pack --strict
+zig-out\bin\wk.exe image littlefs -i payload/data -o pack/data.lfs -b 4096 -p 256
 zig-out\bin\wk.exe image flashpack --payload-dir payload --out-dir flash
 powershell -File tools\fetch-upgcmd-deps.ps1 -SdkRoot <luban-lite>
 powershell -File flash\flash-upgcmd.ps1 -Monitor COM5

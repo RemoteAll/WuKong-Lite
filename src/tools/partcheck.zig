@@ -85,8 +85,8 @@ fn lastUsed(seg: []const u8) usize {
 
 fn detectEraseSize(buf: []const u8) ?usize {
     const candidates = [_]usize{
-        0x1000,   0x2000,   0x4000,   0x8000,   0x10000,  0x20000,
-        0x40000,  0x80000,  0x100000, 0x200000, 0x400000, 0x800000,
+        0x1000,  0x2000,  0x4000,   0x8000,   0x10000,  0x20000,
+        0x40000, 0x80000, 0x100000, 0x200000, 0x400000, 0x800000,
     };
     for (candidates) |size| {
         if (size > buf.len or buf.len % size != 0) continue;
@@ -118,7 +118,7 @@ pub fn jffs2ContentSize(buf: []const u8) u64 {
                 head += @as(usize, (totlen + 3) & ~@as(u32, 3));
             }
         }
-        if (head < buf.len and lastUsed(buf[head..block + erasesize]) > 0) {
+        if (head < buf.len and lastUsed(buf[head .. block + erasesize]) > 0) {
             content_end = block + lastUsed(buf[block .. block + erasesize]);
         }
     }

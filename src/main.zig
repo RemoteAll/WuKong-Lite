@@ -28,6 +28,7 @@ const linkaddr = aic.linkaddr;
 const linksize = aic.linksize;
 const partlist = aic.partlist;
 const partcheck = aic.partcheck;
+const littlefs = aic.littlefs;
 const flashpack = aic.flashpack;
 const fw_image = aic.fw_image;
 const image = aic.image;
@@ -154,6 +155,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image linksize --map <file.map> [--out-dir <dir>]
         \\  image partlist --config <image_cfg.json> --output <partition_file_list.h>
         \\  image partcheck -c <image_cfg.json> -d <packed-dir> [-t 90] [--strict]
+        \\  image littlefs -i <dir> -o <image.lfs> -b <block> [-p <page>] [-s <size>] [-r <n>] [--all]
         \\  image flashpack [--config <image_cfg.json>] [--payload-dir <dir>] [--out-dir <dir>]
         \\  image dump <file>
         \\
@@ -1126,6 +1128,49 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         defer partcheck.deinitResult(aa, &result);
         try out.writeAll(result.text);
         if (hasFlag(rest, "--strict") and result.overflow > 0) return partcheck.Error.PartitionOverflow;
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "littlefs")) {
+        const input = getOpt(rest, "--input") orelse getOpt(rest, "-i") orelse return error.MissingArgument;
+        const output = getOpt(rest, "--output") orelse getOpt(rest, "-o") orelse return error.MissingArgument;
+        const block_text = getOpt(rest, "--block") orelse getOpt(rest, "-b") orelse return error.MissingArgument;
+        const block = std.fmt.parseInt(u32, block_text, 0) catch return error.InvalidArgument;
+        const page: u32 = if (getOpt(rest, "--page")) |v|
+            (std.fmt.parseInt(u32, v, 0) catch return error.InvalidArgument)
+        else if (getOpt(rest, "-p")) |v|
+            (std.fmt.parseInt(u32, v, 0) catch return error.InvalidArgument)
+        else
+            256;
+        const image_size: ?u32 = if (getOpt(rest, "--size")) |v|
+            (std.fmt.parseInt(u32, v, 0) catch return error.InvalidArgument)
+        else if (getOpt(rest, "-s")) |v|
+            (std.fmt.parseInt(u32, v, 0) catch return error.InvalidArgument)
+        else
+            null;
+        const reserved: ?u32 = if (getOpt(rest, "--reserved")) |v|
+            (std.fmt.parseInt(u32, v, 0) catch return error.InvalidArgument)
+        else if (getOpt(rest, "-r")) |v|
+            (std.fmt.parseInt(u32, v, 0) catch return error.InvalidArgument)
+        else
+            null;
+
+        const result = littlefs.build(aa, io, .{
+            .input_dir = input,
+            .output = output,
+            .block_size = block,
+            .page_size = page,
+            .image_size = image_size,
+            .reserved = reserved,
+            .add_all = hasFlag(rest, "--all"),
+        }) catch |err| {
+            try out.print("littlefs 失败：{s}\n", .{@errorName(err)});
+            return err;
+        };
+        try out.print(
+            "littlefs: {s}（镜像 {d} B，裁剪后 {d} B）\n",
+            .{ output, result.image_size, result.trimmed_size },
+        );
         return;
     }
 
