@@ -31,6 +31,7 @@ const partcheck = aic.partcheck;
 const littlefs = aic.littlefs;
 const fsinstall = aic.fsinstall;
 const sdk_update = aic.sdk_update;
+const rtt2freertos = aic.rtt2freertos;
 const panic = aic.panic;
 const preboot = aic.preboot;
 const privres = aic.privres;
@@ -130,6 +131,8 @@ fn dispatch(io: std.Io, aa: std.mem.Allocator, argv: []const []const u8, out: *s
         try cmdFs(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "sdk-update")) {
         try cmdSdkUpdate(io, aa, rest, out);
+    } else if (std.mem.eql(u8, cmd, "rtt2freertos")) {
+        try cmdRtt2Freertos(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "panic")) {
         try cmdPanic(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "shell")) {
@@ -288,6 +291,83 @@ fn locateAddr(
     return aa.dupe(u8, "");
 }
 
+/// `wk rtt2freertos <defconfig> [-o out] [--dry-run]` —— 等价 `tools/scripts/rtt2freertos.py`。
+fn cmdRtt2Freertos(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std.Io.Writer) !void {
+    const input_path = blk: {
+        for (args) |a| {
+            if (!std.mem.startsWith(u8, a, "-")) break :blk a;
+        }
+        return error.MissingArgument;
+    };
+
+    var opts = rtt2freertos.Options{};
+    if (getOpt(args, "--console-uart")) |v| {
+        opts.console_uart = std.fmt.parseInt(u32, v, 0) catch return error.InvalidArgument;
+    }
+    if (getOpt(args, "--sysname")) |v| opts.sysname = v;
+
+    const input = try readText(io, aa, input_path);
+    defer aa.free(input);
+
+    var result = rtt2freertos.convert(aa, input, opts) catch |err| switch (err) {
+        rtt2freertos.Error.NoProjectHeader => {
+            try out.print("rtt2freertos: {s} 缺少工程头（PRJ_CHIP/PRJ_BOARD/PRJ_KERNEL/PRJ_APP）\n", .{input_path});
+            return err;
+        },
+        rtt2freertos.Error.NotRtThread => {
+            try out.print("rtt2freertos: {s} 的 PRJ_KERNEL 不是 rt-thread，本工具只处理 rt-thread 方案\n", .{input_path});
+            return err;
+        },
+        else => return err,
+    };
+    defer result.deinit();
+
+    const out_path = getOpt(args, "--output") orelse getOpt(args, "-o") orelse blk: {
+        const dir = std.fs.path.dirname(input_path) orelse ".";
+        break :blk try std.fmt.allocPrint(aa, "{s}/{s}_defconfig", .{ dir, result.plan_name });
+    };
+    const out_path_owned = (getOpt(args, "--output") orelse getOpt(args, "-o")) == null;
+    defer if (out_path_owned) aa.free(out_path);
+
+    try out.print("input  : {s}\n", .{input_path});
+    try out.print("output : {s}\n", .{out_path});
+    try out.print("plan   : {s}\n\n", .{result.plan_name});
+
+    const report = result.report;
+    if (report.kept_off.len > 0) {
+        try out.print("kept explicitly off ({d}, they default to y in the target tree):\n", .{report.kept_off.len});
+        for (report.kept_off) |n| try out.print("  - {s}\n", .{n});
+    }
+    if (report.dropped.len > 0) {
+        try out.print("dropped functional switches ({d}):\n", .{report.dropped.len});
+        const shown = @min(report.dropped.len, 15);
+        for (report.dropped[0..shown]) |n| try out.print("  - {s}\n", .{n});
+        if (report.dropped.len > shown) try out.print("  ... {d} more\n", .{report.dropped.len - shown});
+    }
+    if (report.silent > 0) {
+        try out.print("silently dropped non-functional options (kernel options / value settings): {d}\n", .{report.silent});
+    }
+    if (report.mapped.len > 0) {
+        try out.writeAll("mapped:\n");
+        for (report.mapped) |n| try out.print("  - {s}\n", .{n});
+    }
+    if (report.added.len > 0) {
+        try out.print("added ({d}):\n", .{report.added.len});
+        for (report.added) |n| try out.print("  - {s}\n", .{n});
+    }
+    try out.writeAll("\n");
+
+    if (hasFlag(args, "--dry-run") or hasFlag(args, "-n")) {
+        try out.writeAll("--- preview (nothing written) ---\n");
+        try out.writeAll(result.text);
+        return;
+    }
+
+    try writeText(io, out_path, result.text);
+    try out.print("written to {s}\n", .{out_path});
+    try out.print("\nnext steps:\n  scons --apply-def={s}_defconfig && scons -j8\n", .{result.plan_name});
+}
+
 fn cmdFs(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std.Io.Writer) !void {
     if (args.len == 0) return error.MissingArgument;
     const sub = args[0];
@@ -367,6 +447,8 @@ fn usage(out: *std.Io.Writer) !void {
         \\  fs install -s <src> -d <dst> [-o <sdkout>]
         \\  fs clean -c <path1,path2> [-o <sdkout>]
         \\  sdk-update --root <SDK 根目录>     修复 target/**/*pinmux.c（等价 sdk_update.py）
+        \\  rtt2freertos <defconfig> [-o <out>] [--dry-run] [--sysname aic]
+        \\                                    rt-thread 方案 → freertos 方案（等价 rtt2freertos.py）
         \\  panic -l <panic.log> [-e <elf>] [-c riscv|csky] [--addr2line <tool>]
         \\  shell [-c "cmd"]            交互式 msh（uart0 / gpio0 模拟设备）
         \\  run hello                   HelloWorld 示例

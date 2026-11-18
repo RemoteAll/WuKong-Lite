@@ -34,7 +34,7 @@
 | P2-2 | `calc_linked_addr.py` | ✅ | `wk image linkaddr`：MEM_AUTO/显式 TEXT_BASE + 4 占位符替换；实测 text=0x400ef000/load=0x400eef00 | 2026-11-17 完成 |
 | P2-3 | `linked_size.py` | ✅ | `wk image linksize` 生成 summary/detail/dironly；hello_uart.map 与参考 summary 完全一致（382=187+84+111） | 2026-11-17 完成 |
 | P2-4 | `gen_partition_file_list.py` / `partition_check.py` | ✅ | `partlist` 与参考 D13x 输出一致；`partcheck` 在 50%/125% 样本上与参考表格、`--strict` 退出码一致 | 2026-11-18 完成 |
-| P2-5 | `fsinstall.py` / `config_update.py` / `rtt2freertos.py` / `sdk_update.py` / `release_patch.py` / `panic_parse.py` / `build_mini_bootloader.py` | 🟡 | `wk fs install/clean`、`wk sdk-update`、`wk panic` 实测通过 | 2026-11-18：`sdk_update.py` → `wk sdk-update`（忽略行尾逐行一致）；`panic_parse.py` → `wk panic`（与参考输出**逐行一致**）。剩下 `config_update.py`（交互式 menuconfig，无 TUI 需求）、`rtt2freertos.py`、`release_patch.py`、`build_mini_bootloader.py` 待做 |
+| P2-5 | `fsinstall.py` / `config_update.py` / `rtt2freertos.py` / `sdk_update.py` / `release_patch.py` / `panic_parse.py` / `build_mini_bootloader.py` | 🟡 | `wk fs install/clean`、`wk sdk-update`、`wk panic`、`wk rtt2freertos` 实测通过 | 2026-11-18：`rtt2freertos.py` → `wk rtt2freertos`（**28 个官方 rt-thread 方案输出与参考逐字节一致**，忽略行尾）。剩下 `config_update.py`（交互式 menuconfig，无 TUI 需求）、`release_patch.py`、`build_mini_bootloader.py` 待做 |
 | P2-6 | 官方文档 `topics/` 464 篇 + images/webhelp | ⬜ | 目录/链接完整性 | 体积大，建议按需生成离线包，不全量入库 |
 
 ## P3 · 生态与二进制
@@ -49,9 +49,8 @@
 ## 本轮建议顺序（2026-11-18 更新）
 
 1. ~~P1-5 `encrypt_rsa_key`~~ ✅
-2. ~~P2-5 `sdk_update.py` / `panic_parse.py`~~ ✅
-3. P2-5 余项：`rtt2freertos.py`（rtconfig.h → FreeRTOS 配置）、`release_patch.py`（发布补丁）、
-   `build_mini_bootloader.py`（子构建编排，需 SCons 环境）
+2. ~~P2-5 `sdk_update.py` / `panic_parse.py` / `rtt2freertos.py`~~ ✅
+3. P2-5 余项：`release_patch.py`（发布补丁）、`build_mini_bootloader.py`（子构建编排，需 SCons 环境）
 4. P0-3 主机烧写协议：按开源设备端 `lib/aicupg` 实现 UART 客户端（无 DLL 依赖）
 5. P1-6 ITS `signature*`/`cipher` 节点 + AIC 头签名/加密联动（独立 RSA/AES 已就绪）
 6. P1-3 / P1-4 待上游源码（uffs 核心、firmware_security_encrypt），不猜测实现

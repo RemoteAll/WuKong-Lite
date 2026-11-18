@@ -23,7 +23,7 @@
 
 ```powershell
 zig build              # 构建 wk.exe
-zig build test         # 89 项单测
+zig build test         # 94 项单测
 .\zig-out\bin\wk.exe   # 查看命令
 wk image flashpack --payload-dir payload --out-dir flash
 powershell -File tools\fetch-upgcmd-deps.ps1 -SdkRoot G:\Code\C\luban-lite
@@ -36,6 +36,7 @@ powershell -File tools\build-zig-app.ps1 -App hello_uart
 wk image rsakey -r key.pem [-a aes.key | -d des.key] [-o outdir]   # encrypt_rsa_key.py
 wk panic -l panic.log [-e app.elf] [--addr2line <tool>]            # panic_parse.py
 wk sdk-update --root <SDK根目录> [--write]                          # sdk_update.py
+wk rtt2freertos <rt-thread_defconfig> [-o out]                      # rtt2freertos.py
 ```
 
 ## 4. 编码与验证纪律

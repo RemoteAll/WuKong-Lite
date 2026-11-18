@@ -45,6 +45,7 @@
 | `encrypt_rsa_key.py` | `src/tools/rsa_key.zig`、`wk image rsakey` | 私钥 AES/DES 加密 + 公钥 PKCS#1/SPKI 四种组合与参考脚本**逐字节一致**（2026-11-18） |
 | `sdk_update.py` | `src/tools/sdk_update.zig`、`wk sdk-update` | 同一 pinmux.c 样本，忽略行尾后与参考脚本输出逐行一致；已修复文件幂等（2026-11-18） |
 | `panic_parse.py` | `src/tools/panic.zig`、`wk panic` | 同一 panic 日志 + `d13x.elf`，与参考脚本输出**逐行一致**（寄存器/栈回溯/地址定位；2026-11-18） |
+| `rtt2freertos.py` | `src/tools/rtt2freertos.zig`、`wk rtt2freertos` | 28 个官方 `*_rt-thread_*_defconfig` 全部转换，与参考脚本输出**逐字节一致**（忽略 Windows CRLF；2026-11-18） |
 | `openssl`（AES/RSA 子集） | `crypt.zig`、`rsa.zig` | AES 双向逐字节；RSA 与 openssl 互通 |
 | `upgcmd`（使用侧） | `tools/fetch-upgcmd-deps.ps1`、`flash-*.ps1` | `-e` 解析本仓库 AIC.FW |
 | Kconfig/defconfig/codegen | `kconfig.zig`、`codegen.zig`、`modules.zig` | 单测覆盖 |
@@ -76,9 +77,10 @@
   （前向链式）、已排除 ECB/CBC/CTR(XOR 流)；其余待上游公开后对齐。
   `encrypt_rsa_key.py` 已完成（见 ✅ 表）；SPIENC/eFuse 安全启动仍保留官方工具；
 - `mkimage` 的 RSA/SM2 签名节点、公钥内嵌、`-K` 更新 dtb；
-- 镜像辅助脚本：`config_update.py`（交互式 menuconfig，无 TUI 需求）、`rtt2freertos.py`、
-  `release_patch.py`、`build_mini_bootloader.py`。
-  （`sdk_update.py` → `wk sdk-update`、`panic_parse.py` → `wk panic` 已完成，见 ✅ 表）
+- 镜像辅助脚本：`config_update.py`（交互式 menuconfig，无 TUI 需求）、`release_patch.py`、
+  `build_mini_bootloader.py`。
+  （`sdk_update.py` → `wk sdk-update`、`panic_parse.py` → `wk panic`、
+  `rtt2freertos.py` → `wk rtt2freertos` 已完成，见 ✅ 表）
 
 ### P2：中间件/生态
 - `packages/artinchip`：ota、xip_ramcode、zipfs、uds、barcode、lvgl-ui、mpp、
