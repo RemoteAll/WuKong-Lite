@@ -33,6 +33,7 @@ const fsinstall = aic.fsinstall;
 const sdk_update = aic.sdk_update;
 const rtt2freertos = aic.rtt2freertos;
 const upg_frame = aic.upg_frame;
+const upg_payload = aic.upg_payload;
 const panic = aic.panic;
 const preboot = aic.preboot;
 const privres = aic.privres;
@@ -375,8 +376,16 @@ fn cmdRtt2Freertos(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, 
 /// `wk upg decode -i <frame.bin>` —— upgcmd 帧协议编解码（P0-3 底座）。
 fn cmdUpg(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std.Io.Writer) !void {
     if (args.len == 0) {
-        try out.writeAll("usage: wk upg frame --cmd <n> [--payload <text>|--payload-file <f>] [-o out.bin]\n" ++
-            "       wk upg decode -i <frame.bin>\n");
+        try out.writeAll(
+            "usage: wk upg frame --cmd <n> [--payload <text>|--payload-file <f>] [-o out.bin]\n" ++
+                "       wk upg decode -i <frame.bin>\n" ++
+                "       wk upg <heartbeat|proto-version|hw-info|device-list|upload-dir|cancel|help> [--task-id N]\n" ++
+                "       wk upg config-device --port <COM4|bus:port> [--baudrate N]\n" ++
+                "       wk upg burn --image <path> [--no-reboot] [--partition all]\n" ++
+                "       wk upg send-cmd --command <text>\n" ++
+                "       wk upg get-log [--timeout N]\n" ++
+                "       wk upg upload-start --file <path> [--remote-dir <dir>]\n",
+        );
         return error.MissingArgument;
     }
     const sub = args[0];
@@ -434,8 +443,113 @@ fn cmdUpg(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std
         return;
     }
 
-    try out.print("upg: 未知子命令 {s}（可用 frame / decode）\n", .{sub});
+    // ---- 高层请求：载荷构造与参考 aicupg_client.py 逐字节一致 ----
+    const task_id: u64 = blk: {
+        if (getOpt(rest, "--task-id")) |v| break :blk std.fmt.parseInt(u64, v, 0) catch return error.InvalidArgument;
+        break :blk 1;
+    };
+    const out_path = getOpt(rest, "--output") orelse getOpt(rest, "-o");
+
+    const simple = [_]struct { name: []const u8, cmd: u8 }{
+        .{ .name = "heartbeat", .cmd = upg_frame.Cmd.heartbeat },
+        .{ .name = "proto-version", .cmd = upg_frame.Cmd.proto_version },
+        .{ .name = "hw-info", .cmd = upg_frame.Cmd.get_hw_info },
+        .{ .name = "device-list", .cmd = upg_frame.Cmd.get_device_list },
+        .{ .name = "upload-dir", .cmd = upg_frame.Cmd.get_upload_dir },
+        .{ .name = "cancel", .cmd = upg_frame.Cmd.cancel_burn },
+        .{ .name = "help", .cmd = upg_frame.Cmd.help },
+    };
+    for (simple) |s| {
+        if (!std.mem.eql(u8, sub, s.name)) continue;
+        const payload = try upg_payload.taskOnly(aa, task_id);
+        defer aa.free(payload);
+        try emitUpgFrame(io, aa, out, s.cmd, payload, out_path, s.name);
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "config-device")) {
+        const port = getOpt(rest, "--port") orelse return error.MissingArgument;
+        const baud: u32 = if (getOpt(rest, "--baudrate")) |v|
+            (std.fmt.parseInt(u32, v, 0) catch return error.InvalidArgument)
+        else
+            0;
+        const payload = try upg_payload.configDevice(aa, task_id, port, baud);
+        defer aa.free(payload);
+        try emitUpgFrame(io, aa, out, upg_frame.Cmd.config_device, payload, out_path, "config-device");
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "burn")) {
+        const image_path = getOpt(rest, "--image") orelse getOpt(rest, "-i") orelse return error.MissingArgument;
+        const normalized = try upg_payload.normalizePath(aa, image_path);
+        defer aa.free(normalized);
+        const partition_mode = getOpt(rest, "--partition") orelse "all";
+        const payload = try upg_payload.burnImage(
+            aa,
+            task_id,
+            normalized,
+            !hasFlag(rest, "--no-reboot"),
+            partition_mode,
+        );
+        defer aa.free(payload);
+        try emitUpgFrame(io, aa, out, upg_frame.Cmd.burn_image, payload, out_path, "burn");
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "send-cmd")) {
+        const command = getOpt(rest, "--command") orelse getOpt(rest, "-c") orelse return error.MissingArgument;
+        const payload = try upg_payload.sendCmd(aa, task_id, command);
+        defer aa.free(payload);
+        try emitUpgFrame(io, aa, out, upg_frame.Cmd.send_cmd, payload, out_path, "send-cmd");
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "get-log")) {
+        const timeout: u32 = if (getOpt(rest, "--timeout")) |v|
+            (std.fmt.parseInt(u32, v, 0) catch return error.InvalidArgument)
+        else
+            5;
+        const payload = try upg_payload.getLog(aa, task_id, timeout);
+        defer aa.free(payload);
+        try emitUpgFrame(io, aa, out, upg_frame.Cmd.get_log, payload, out_path, "get-log");
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "upload-start")) {
+        const file = getOpt(rest, "--file") orelse getOpt(rest, "-f") orelse return error.MissingArgument;
+        const stat = std.Io.Dir.cwd().statFile(io, file, .{}) catch |err| {
+            try out.print("upg upload-start: 无法读取 {s}（{s}）\n", .{ file, @errorName(err) });
+            return err;
+        };
+        const remote_dir = getOpt(rest, "--remote-dir") orelse "C:\\temp\\aicupg_firmware\\";
+        const payload = try upg_payload.uploadFirmware(aa, std.fs.path.basename(file), stat.size, remote_dir);
+        defer aa.free(payload);
+        try emitUpgFrame(io, aa, out, upg_frame.Cmd.upload_firmware, payload, out_path, "upload-start");
+        return;
+    }
+
+    try out.print("upg: 未知子命令 {s}（可用 frame / decode / 见 wk upg 无参帮助）\n", .{sub});
     return error.UnknownCommand;
+}
+
+/// 打印（并按需落盘）一帧：与 `wk upg frame` 的输出格式一致。
+fn emitUpgFrame(
+    io: std.Io,
+    aa: std.mem.Allocator,
+    out: *std.Io.Writer,
+    cmd: u8,
+    payload: []const u8,
+    out_path: ?[]const u8,
+    label: []const u8,
+) !void {
+    const frame = try upg_frame.encode(aa, cmd, payload);
+    defer aa.free(frame);
+    if (out_path) |p| {
+        try writeBytes(io, p, frame);
+        try out.print("upg {s}: cmd=0x{x:0>2} payload={d} B frame={d} B -> {s}\n", .{ label, cmd, payload.len, frame.len, p });
+    }
+    for (frame) |b| try out.print("{x:0>2}", .{b});
+    try out.writeAll("\n");
 }
 
 fn cmdFs(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std.Io.Writer) !void {
