@@ -19,9 +19,9 @@
 |----|------|------|----------|--------|
 | P1-1 | FAT32 / `--fullpart` / AICF `dirent_*` | ✅ | FAT32 + fullpart 均用 `mcopy` 回读；AICF length=32、dirent=0 与参考一致 | 2026-11-17 完成 |
 | P1-2 | littlefs 镜像（`makelittlefs.py`） | ✅ | `mklittlefs -l/-u` 可列出/解包；多文件嵌套内容一致 | 2026-11-18 完成（复用上游 littlefs 2.5） |
-| P1-3 | uffs 镜像（`makeuffs.py`） | ⬜ | 参考 `mkuffs.exe` 产物 | 依赖 littlefs 经验，排在 P1-2 后 |
-| P1-4 | `firmware_security_encrypt`（AES-XTS/nonce/tweak） | ⬜ | 参考 exe 加密结果逐字节 | 先确认密钥/nonce 派生与镜像布局 |
-| P1-5 | `encrypt_rsa_key.py` | ⬜ | 参考脚本输出 | 与 P1-4 共用密钥封装 |
+| P1-3 | uffs 镜像（`makeuffs.py`） | ⛔ 受阻 | —— | 参考 `mkuffs.exe` 只是外壳，UFFS 文件系统实现（树/页状态/ECC）**不在本 SDK 源码内**（`bsp/artinchip/drv/spinand/uffs.c` 只含移植层，RT-Thread `components/dfs/filesystems` 无 uffs）。需引入上游 uffs 源码才可对齐，暂不猜测实现 |
+| P1-4 | `firmware_security_encrypt`（AES-XTS/nonce/tweak） | ⛔ 受阻 | 已实测模式特征（见下） | 工具为预编译 exe，SDK 无源码。**实测事实**：只读密钥文件前 16 B（AES-128）；输入必须是 16 的整数倍、无填充；改明文第 2 块只影响第 2~N 块（前向链式）；已排除 ECB / CBC / CTR(XOR 流) / 纯 XTS 结构。无源码情况下不猜测实现，留待上游公开 |
+| P1-5 | `encrypt_rsa_key.py` | ✅ | `wk image rsakey` 与参考脚本**逐字节一致**（私钥 AES/DES 加密、公钥 PKCS#1/SPKI 四种组合） | 2026-11-18 完成；公钥+对称密钥参考脚本自身会崩，我们按语义实现并写明差异 |
 | P1-6 | ITS `signature*`/`cipher` 节点 + AIC 头签名/加密联动 | 🟡 | `mkimage` 签名 FIT + 我们解析 | 独立 RSA/AES 已有；补节点生成与头字段 |
 | P1-7 | `mkcpio` OTA（`ota-subimgs.cfg`、`ota_info.bin`、尺寸回填） | ✅ | `wk image ota` 生成 512B env + crc cpio；`cpio.exe -it` 可列出；size 回填实测 1024 | 2026-11-17 完成 |
 | P1-8 | `simg_dump` 等价 CLI | ✅ | `wk image simg --dump` 输出头/chunk 表，单测覆盖 | 2026-11-17 完成 |
@@ -34,7 +34,7 @@
 | P2-2 | `calc_linked_addr.py` | ✅ | `wk image linkaddr`：MEM_AUTO/显式 TEXT_BASE + 4 占位符替换；实测 text=0x400ef000/load=0x400eef00 | 2026-11-17 完成 |
 | P2-3 | `linked_size.py` | ✅ | `wk image linksize` 生成 summary/detail/dironly；hello_uart.map 与参考 summary 完全一致（382=187+84+111） | 2026-11-17 完成 |
 | P2-4 | `gen_partition_file_list.py` / `partition_check.py` | ✅ | `partlist` 与参考 D13x 输出一致；`partcheck` 在 50%/125% 样本上与参考表格、`--strict` 退出码一致 | 2026-11-18 完成 |
-| P2-5 | `fsinstall.py` / `config_update.py` / `rtt2freertos.py` / `sdk_update.py` / `release_patch.py` / `panic_parse.py` / `build_mini_bootloader.py` | 🟡 | `wk fs install/clean` 实测递归安装/清理与内容哈希一致 | fsinstall 完成（并修正参考脚本相对路径写到盘符根的缺陷）；其余待做 |
+| P2-5 | `fsinstall.py` / `config_update.py` / `rtt2freertos.py` / `sdk_update.py` / `release_patch.py` / `panic_parse.py` / `build_mini_bootloader.py` | 🟡 | `wk fs install/clean`、`wk sdk-update`、`wk panic` 实测通过 | 2026-11-18：`sdk_update.py` → `wk sdk-update`（忽略行尾逐行一致）；`panic_parse.py` → `wk panic`（与参考输出**逐行一致**）。剩下 `config_update.py`（交互式 menuconfig，无 TUI 需求）、`rtt2freertos.py`、`release_patch.py`、`build_mini_bootloader.py` 待做 |
 | P2-6 | 官方文档 `topics/` 464 篇 + images/webhelp | ⬜ | 目录/链接完整性 | 体积大，建议按需生成离线包，不全量入库 |
 
 ## P3 · 生态与二进制
@@ -46,12 +46,14 @@
 | P3-3 | `crc32/xxd/sed/cat/truncate` 等 exe | ✅ | 功能已被 Zig 实现覆盖；不迁移二进制 |
 | P3-4 | `mtools`（mformat/mcopy） | ✅ | 已验证参考二进制可用，不重写 |
 
-## 本轮建议顺序（2026-11-17）
+## 本轮建议顺序（2026-11-18 更新）
 
-1. P1-8 `simg --dump`（最小、可直接对照文本）
-2. P2-1 `merge_files`（纯字节操作，易逐字节验证）
-3. P1-7 mkcpio OTA（补尺寸回填，能直接服务烧写）
-4. P1-1 FAT32（工作量大，单独一轮）
-5. P1-2/3 littlefs/uffs（先拿参考 exe 做黑盒对照）
+1. ~~P1-5 `encrypt_rsa_key`~~ ✅
+2. ~~P2-5 `sdk_update.py` / `panic_parse.py`~~ ✅
+3. P2-5 余项：`rtt2freertos.py`（rtconfig.h → FreeRTOS 配置）、`release_patch.py`（发布补丁）、
+   `build_mini_bootloader.py`（子构建编排，需 SCons 环境）
+4. P0-3 主机烧写协议：按开源设备端 `lib/aicupg` 实现 UART 客户端（无 DLL 依赖）
+5. P1-6 ITS `signature*`/`cipher` 节点 + AIC 头签名/加密联动（独立 RSA/AES 已就绪）
+6. P1-3 / P1-4 待上游源码（uffs 核心、firmware_security_encrypt），不猜测实现
 
 每个条目完成时：补单测/样本 → 与参考工具比对 → 在本表改状态 → `docs/决策记录.md` 记一条（含用户原话）。

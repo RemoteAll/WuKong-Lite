@@ -42,6 +42,9 @@
 | `fsinstall.py` | `src/tools/fsinstall.zig`、`wk fs install/clean` | 递归安装/单文件安装/清理；内容 SHA256 一致（2026-11-18） |
 | `mk_prebootprog.py` | `src/tools/preboot.zig`、`src/tools/des.zig`、`wk image pbp` | 明文与 PNK 加密 PBP 均与参考逐字节一致（512 B，DIFF=0；2026-11-18） |
 | `mk_private_resource.py` | `src/tools/privres.zig`、`wk image privres` | `pbp_cfg.json` 1712 B、`pbp_security.json` 52 B 均与参考逐字节一致（2026-11-18） |
+| `encrypt_rsa_key.py` | `src/tools/rsa_key.zig`、`wk image rsakey` | 私钥 AES/DES 加密 + 公钥 PKCS#1/SPKI 四种组合与参考脚本**逐字节一致**（2026-11-18） |
+| `sdk_update.py` | `src/tools/sdk_update.zig`、`wk sdk-update` | 同一 pinmux.c 样本，忽略行尾后与参考脚本输出逐行一致；已修复文件幂等（2026-11-18） |
+| `panic_parse.py` | `src/tools/panic.zig`、`wk panic` | 同一 panic 日志 + `d13x.elf`，与参考脚本输出**逐行一致**（寄存器/栈回溯/地址定位；2026-11-18） |
 | `openssl`（AES/RSA 子集） | `crypt.zig`、`rsa.zig` | AES 双向逐字节；RSA 与 openssl 互通 |
 | `upgcmd`（使用侧） | `tools/fetch-upgcmd-deps.ps1`、`flash-*.ps1` | `-e` 解析本仓库 AIC.FW |
 | Kconfig/defconfig/codegen | `kconfig.zig`、`codegen.zig`、`modules.zig` | 单测覆盖 |
@@ -66,12 +69,16 @@
 - **烧写协议**：主机端 `upgcmd` 源码（内部 `aicupg`）、USB/UART 协议实现。
 
 ### P1：镜像与安全能力
-- 文件系统镜像：`makeuffs.py`（uffs）；
-- 固件加密：`firmware_security_encrypt`（含 nonce/tweak 的 AES-XTS 类流程）、
-  `encrypt_rsa_key.py`、SPIENC/eFuse 安全启动；
+- 文件系统镜像：`makeuffs.py`（uffs）—— **受阻**：本 SDK 只带 `mkuffs.exe` 外壳与
+  `drv/spinand/uffs.c` 移植层，UFFS 核心（树/页状态/ECC）源码不在仓库内，无依据不可猜实现；
+- 固件加密：`firmware_security_encrypt`（含 nonce/tweak）—— **受阻**：预编译 exe，SDK 无源码。
+  实测特征：只取密钥文件前 16 B（AES-128）、输入需 16 B 对齐且不填充、改动一块明文会影响其后所有块
+  （前向链式）、已排除 ECB/CBC/CTR(XOR 流)；其余待上游公开后对齐。
+  `encrypt_rsa_key.py` 已完成（见 ✅ 表）；SPIENC/eFuse 安全启动仍保留官方工具；
 - `mkimage` 的 RSA/SM2 签名节点、公钥内嵌、`-K` 更新 dtb；
-- 镜像辅助脚本：`config_update.py`、`rtt2freertos.py`、`sdk_update.py`、`release_patch.py`、
-  `panic_parse.py`、`build_mini_bootloader.py`。
+- 镜像辅助脚本：`config_update.py`（交互式 menuconfig，无 TUI 需求）、`rtt2freertos.py`、
+  `release_patch.py`、`build_mini_bootloader.py`。
+  （`sdk_update.py` → `wk sdk-update`、`panic_parse.py` → `wk panic` 已完成，见 ✅ 表）
 
 ### P2：中间件/生态
 - `packages/artinchip`：ota、xip_ramcode、zipfs、uds、barcode、lvgl-ui、mpp、

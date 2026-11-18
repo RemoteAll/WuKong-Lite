@@ -30,8 +30,11 @@ const partlist = aic.partlist;
 const partcheck = aic.partcheck;
 const littlefs = aic.littlefs;
 const fsinstall = aic.fsinstall;
+const sdk_update = aic.sdk_update;
+const panic = aic.panic;
 const preboot = aic.preboot;
 const privres = aic.privres;
+const rsa_key = aic.rsa_key;
 const flashpack = aic.flashpack;
 const fw_image = aic.fw_image;
 const image = aic.image;
@@ -58,9 +61,23 @@ const CONFIG_PLANS = "wk/target/configs";
 const GENERATED_CONFIG = "src/generated/config.zig";
 const BUILD_PLAN = "wk/config/build_plan.json";
 
+// Windows 控制台代码页（见 main() 里的说明）。
+extern "kernel32" fn SetConsoleOutputCP(code_page: u32) callconv(.winapi) c_int;
+extern "kernel32" fn SetConsoleCP(code_page: u32) callconv(.winapi) c_int;
+
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const io = init.io;
+
+    // Windows 控制台默认是 GBK(936)，而本程序统一输出 UTF-8 中文 —— 仅在 stdout
+    // 是终端时切换输出代码页，避免 `wk` 的中文提示在 PowerShell 里显示成乱码。
+    // 重定向到文件/管道时不改动（不影响落盘内容）。
+    if (@import("builtin").os.tag == .windows) {
+        if (std.Io.File.stdout().isTty(io) catch false) {
+            _ = SetConsoleOutputCP(65001);
+            _ = SetConsoleCP(65001);
+        }
+    }
 
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
@@ -111,6 +128,10 @@ fn dispatch(io: std.Io, aa: std.mem.Allocator, argv: []const []const u8, out: *s
         try cmdImage(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "fs")) {
         try cmdFs(io, aa, rest, out);
+    } else if (std.mem.eql(u8, cmd, "sdk-update")) {
+        try cmdSdkUpdate(io, aa, rest, out);
+    } else if (std.mem.eql(u8, cmd, "panic")) {
+        try cmdPanic(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "shell")) {
         try cmdShell(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "run")) {
@@ -122,6 +143,149 @@ fn dispatch(io: std.Io, aa: std.mem.Allocator, argv: []const []const u8, out: *s
         try usage(out);
         return error.UnknownCommand;
     }
+}
+
+/// `wk sdk-update --root <SDK 根目录> [--write]` —— 等价 `tools/scripts/sdk_update.py`。
+fn cmdSdkUpdate(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std.Io.Writer) !void {
+    const root = getOpt(args, "--root") orelse getOpt(args, "-r") orelse ".";
+    const write = hasFlag(args, "--write");
+    const result = sdk_update.updateRoot(aa, io, root, write, out) catch |err| {
+        try out.print("sdk-update 失败：{s}（root={s}）\n", .{ @errorName(err), root });
+        return err;
+    };
+    try out.print(
+        "sdk-update: 扫描 {d} 个 pinmux.c，{s} {d} 个（{s}）\n",
+        .{ result.scanned, if (write) "修复" else "待修复", result.changed, if (write) "已落盘" else "加 --write 落盘" },
+    );
+}
+
+/// `wk panic -l <log> [-e <elf>] [-c riscv|csky] [--addr2line <tool>]` —— 等价 `panic_parse.py`。
+fn cmdPanic(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std.Io.Writer) !void {
+    const log_path = getOpt(args, "--log") orelse getOpt(args, "-l") orelse return error.MissingArgument;
+    const elf_path = getOpt(args, "--elf") orelse getOpt(args, "-e");
+
+    var cpu: panic.Cpu = .riscv;
+    if (getOpt(args, "--cpu") orelse getOpt(args, "-c")) |name| {
+        if (std.ascii.eqlIgnoreCase(name, "riscv") or
+            std.ascii.eqlIgnoreCase(name, "c906") or
+            std.ascii.eqlIgnoreCase(name, "e906") or
+            std.ascii.eqlIgnoreCase(name, "e907"))
+        {
+            cpu = .riscv;
+        } else if (std.ascii.eqlIgnoreCase(name, "ck802") or std.ascii.eqlIgnoreCase(name, "csky")) {
+            cpu = .csky;
+        } else {
+            try out.print("panic: 不支持的 CPU「{s}」（可用 riscv / c906 / csky）\n", .{name});
+            return error.InvalidArgument;
+        }
+    }
+
+    const log = try readText(io, aa, log_path);
+    defer aa.free(log);
+    const elf: ?[]u8 = if (elf_path) |p| try readBytes(io, aa, p) else null;
+    defer if (elf) |e| aa.free(e);
+
+    var report = panic.analyze(aa, .{ .log = log, .elf = elf, .cpu = cpu }) catch |err| {
+        try out.print("panic 解析失败：{s}（log={s}）\n", .{ @errorName(err), log_path });
+        return err;
+    };
+    defer report.deinit(aa);
+
+    // 参考脚本会先把 `ELF:` 行打印出来（其余信息在其后）。
+    if (elf != null) try out.print("ELF: {s}\n\n", .{elf_path.?});
+
+    var table: ?panic.SymTab = null;
+    defer if (table) |*t| t.deinit();
+    if (elf) |e| {
+        table = panic.parseSymbols(aa, e) catch |err| blk: {
+            try out.print("panic: ELF 符号表解析失败（{s}），仅按地址输出\n", .{@errorName(err)});
+            break :blk null;
+        };
+    }
+
+    // addr2line：显式指定 > 默认工具链路径（存在则用）
+    var addr2line: ?[]const u8 = getOpt(args, "--addr2line");
+    if (addr2line == null) {
+        const candidates = [_][]const u8{
+            "toolchain/bin/riscv64-unknown-elf-addr2line.exe",
+            "toolchain/bin/riscv64-unknown-elf-addr2line",
+        };
+        for (candidates) |cand| {
+            if (std.Io.Dir.cwd().statFile(io, cand, .{})) |_| {
+                addr2line = cand;
+                break;
+            } else |_| {}
+        }
+    }
+
+    // addr2line 输出里的绝对路径按「当前目录 + /」裁剪（与参考脚本 replace(SDK_DIR,'') 同口径）
+    const cwd_z: ?[:0]u8 = std.process.currentPathAlloc(io, aa) catch null;
+    defer if (cwd_z) |p| aa.free(p);
+    const sdk_dir: ?[]u8 = if (cwd_z) |p| try std.fmt.allocPrint(aa, "{s}/", .{p}) else null;
+    defer if (sdk_dir) |s| aa.free(s);
+
+    try out.print("CPU: {s}\n", .{switch (cpu) {
+        .riscv => "RISC-V",
+        .csky => "CSKY",
+    }});
+    if (addr2line != null) try out.writeAll("Toolchain: riscv64-unknown-elf\n");
+    if (elf != null) {
+        try out.print(
+            "Text section: 0x{x:0>8} - 0x{x:0>8}, size: {d} Bytes\n",
+            .{ report.text_start, report.text_end, report.text_end -% report.text_start },
+        );
+    }
+
+    try out.writeAll("\n---------------------------------------------------------------\nCPU Registers:\n---------------------------------------------------------------\n");
+    if (report.regs.len == 0) {
+        try out.writeAll("No CPU registers found\n");
+    } else {
+        try out.print("CPU Exception: {d} ({s})\n", .{ report.exception, report.exception_name });
+        for (report.regs) |reg| {
+            var loc_buf: []u8 = &.{};
+            if (elf != null and report.inText(reg.value)) loc_buf = try locateAddr(aa, io, addr2line, elf_path, &table, sdk_dir, reg.value);
+            defer if (loc_buf.len > 0) aa.free(loc_buf);
+            const alias = panic.regAlias(reg.name);
+            if (alias.len > 0) {
+                try out.print("{s} ({s}): 0x{x:0>8} {s}\n", .{ reg.name, alias, reg.value, loc_buf });
+            } else {
+                try out.print("{s}: 0x{x:0>8} {s}\n", .{ reg.name, reg.value, loc_buf });
+            }
+        }
+    }
+
+    if (elf == null) return;
+    try out.writeAll("\n---------------------------------------------------------------\nCall Stack:\n---------------------------------------------------------------\n");
+    try out.print(
+        "Stack section: 0x{x:0>8} - 0x{x:0>8}, size: {d} Bytes\n",
+        .{ report.stack_start, report.stack_end, report.stack_end -% report.stack_start },
+    );
+    for (report.frames, 0..) |frame, idx| {
+        const loc = try locateAddr(aa, io, addr2line, elf_path, &table, sdk_dir, frame.addr);
+        defer if (loc.len > 0) aa.free(loc);
+        try out.print("{d:2}: [0x{x:0>8}] {s}\n", .{ idx, frame.addr, loc });
+    }
+}
+
+/// 地址定位：优先 addr2line（file:line），失败退回 ELF 符号（symbol+0xNN）。
+fn locateAddr(
+    aa: std.mem.Allocator,
+    io: std.Io,
+    addr2line: ?[]const u8,
+    elf_path: ?[]const u8,
+    table: *?panic.SymTab,
+    sdk_dir: ?[]const u8,
+    addr: u32,
+) ![]u8 {
+    if (addr2line) |tool| {
+        if (elf_path) |elf| {
+            const text = try panic.locateWithAddr2Line(aa, io, tool, elf, addr, sdk_dir);
+            if (text.len > 0) return text;
+            aa.free(text);
+        }
+    }
+    if (table.*) |*t| return t.describe(aa, addr);
+    return aa.dupe(u8, "");
 }
 
 fn cmdFs(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std.Io.Writer) !void {
@@ -196,11 +360,14 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image littlefs -i <dir> -o <image.lfs> -b <block> [-p <page>] [-s <size>] [-r <n>] [--all]
         \\  image pbp -i <pbp.bin> -o <out.bin> [-m PBP2] [-k <pnk.bin>]
         \\  image privres -c <cfg.json> [-l <cfg2.json,cfg3.json>] [-o <out.bin>]
+        \\  image rsakey -r <key.pem|der> [--aes-key <16B> | --des-key <8B>] [-o <outdir>]
         \\  image flashpack [--config <image_cfg.json>] [--payload-dir <dir>] [--out-dir <dir>]
         \\  image dump <file>
         \\
         \\  fs install -s <src> -d <dst> [-o <sdkout>]
         \\  fs clean -c <path1,path2> [-o <sdkout>]
+        \\  sdk-update --root <SDK 根目录>     修复 target/**/*pinmux.c（等价 sdk_update.py）
+        \\  panic -l <panic.log> [-e <elf>] [-c riscv|csky] [--addr2line <tool>]
         \\  shell [-c "cmd"]            交互式 msh（uart0 / gpio0 模拟设备）
         \\  run hello                   HelloWorld 示例
         \\  demo                        端到端演示（配置 → 打包 → 解析）
@@ -1243,6 +1410,71 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         return;
     }
 
+    if (std.mem.eql(u8, sub, "rsakey")) {
+        const key_path = getOpt(rest, "--rsa") orelse getOpt(rest, "-r") orelse return error.MissingArgument;
+        const aes_path = getOpt(rest, "--aes-key") orelse getOpt(rest, "-a");
+        const des_path = getOpt(rest, "--des-key") orelse getOpt(rest, "-d");
+        if (aes_path != null and des_path != null) {
+            try out.writeAll("rsakey: --aes-key 与 --des-key 只能给一个\n");
+            return error.InvalidArgument;
+        }
+
+        const data = try readBytes(io, aa, key_path);
+        defer aa.free(data);
+        var key = rsa_key.loadKey(aa, data) catch |err| {
+            try out.print("rsakey 解析密钥失败：{s}（{s}）\n", .{ @errorName(err), key_path });
+            return err;
+        };
+        defer key.deinit(aa);
+
+        // 输出基名：与参考脚本一致，取密钥文件去扩展名的路径。
+        const dot = std.mem.lastIndexOfScalar(u8, std.fs.path.basename(key_path), '.');
+        const stem = if (dot) |d| key_path[0 .. key_path.len - (std.fs.path.basename(key_path).len - d)] else key_path;
+        const out_dir = getOpt(rest, "--out-dir") orelse getOpt(rest, "-o");
+
+        if (aes_path == null and des_path == null) {
+            const der = try rsa_key.buildPublicDer(aa, key.n, key.e);
+            defer aa.free(der);
+            const path = try joinOutPath(aa, out_dir, stem, "_pubkey_pkcs1.der");
+            defer aa.free(path);
+            try writeBytes(io, path, der);
+            try out.print("rsakey: {s}（PKCS#1 公钥 {d} B，kind={s}）\n", .{ path, der.len, @tagName(key.kind) });
+            return;
+        }
+
+        const sym_bytes_path = aes_path orelse des_path.?;
+        const sym_data = try readBytes(io, aa, sym_bytes_path);
+        defer aa.free(sym_data);
+        const sym = rsa_key.SymKey.fromBytes(sym_data) catch |err| {
+            try out.print(
+                "rsakey 读取对称密钥失败：{s}（{s}，{d} B，需 16 B AES 或 8 B DES）\n",
+                .{ @errorName(err), sym_bytes_path, sym_data.len },
+            );
+            return err;
+        };
+
+        var enc = rsa_key.encryptKey(aa, &key, sym) catch |err| {
+            try out.print("rsakey 加密密钥失败：{s}（{s}）\n", .{ @errorName(err), key_path });
+            return err;
+        };
+        defer enc.deinit(aa);
+
+        const path = try joinOutPath(aa, out_dir, stem, "_encrypted.der");
+        defer aa.free(path);
+        try writeBytes(io, path, enc.main_der);
+        try out.print(
+            "rsakey: {s}（kind={s}，{d} B，{s}-ECB）\n",
+            .{ path, @tagName(key.kind), enc.main_der.len, if (aes_path != null) "AES-128" else "DES" },
+        );
+        if (enc.extra_pkcs1_der) |extra| {
+            const extra_path = try joinOutPath(aa, out_dir, stem, "_encrypted_pkcs1.der");
+            defer aa.free(extra_path);
+            try writeBytes(io, extra_path, extra);
+            try out.print("rsakey: {s}（{d} B）\n", .{ extra_path, extra.len });
+        }
+        return;
+    }
+
     if (std.mem.eql(u8, sub, "littlefs")) {
         const input = getOpt(rest, "--input") orelse getOpt(rest, "-i") orelse return error.MissingArgument;
         const output = getOpt(rest, "--output") orelse getOpt(rest, "-o") orelse return error.MissingArgument;
@@ -1645,6 +1877,21 @@ fn readText(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 
 fn readBytes(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return readText(io, allocator, path);
+}
+
+/// 拼接输出路径：给了 `--out-dir` 就放进该目录，否则沿用输入路径（参考脚本口径）。
+fn joinOutPath(
+    allocator: std.mem.Allocator,
+    out_dir: ?[]const u8,
+    stem_path: []const u8,
+    suffix: []const u8,
+) ![]u8 {
+    if (out_dir) |d| {
+        const name = try std.fmt.allocPrint(allocator, "{s}{s}", .{ std.fs.path.basename(stem_path), suffix });
+        defer allocator.free(name);
+        return std.fs.path.join(allocator, &.{ d, name });
+    }
+    return std.fmt.allocPrint(allocator, "{s}{s}", .{ stem_path, suffix });
 }
 
 fn partitionSizeForImage(io: std.Io, allocator: std.mem.Allocator, output: []const u8) !u64 {
