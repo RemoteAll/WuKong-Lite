@@ -1,0 +1,18 @@
+{
+    "image": {
+        "info": { "platform": "d13x", "product": "fitsign", "version": "1.0.0",
+                  "media": { "type": "spi-nor", "device_id": 0 } }
+    },
+    "spi-nor": {
+        "size": "16m",
+        "partitions": {
+            "spl": { "size": "512k" },
+            "os":  { "size": "2m" }
+        }
+    },
+    "pre-process": {
+        "itb": {
+            "kernel-signed.itb": { "its": "kernel-signed.its", "keydir": "keys" }
+        }
+    }
+}

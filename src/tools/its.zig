@@ -13,6 +13,7 @@
 //!   * `hash-N { algo = "crc32|md5|sha1|sha256"; }` 自动补 `value`（与 mkimage 一致：value 在前）
 //!   * `signature` / `cipher` 节点明确拒绝（未实现签名/加密）
 const std = @import("std");
+const rsa = @import("rsa.zig");
 const fdt = @import("fdt.zig");
 const crc32 = @import("../bsp/common/crc32.zig");
 
@@ -131,6 +132,78 @@ pub const Parsed = struct {
     }
 };
 
+/// 取字符串属性（去掉结尾 NUL）。
+fn propString(node: *const Node, name: []const u8) ?[]const u8 {
+    const p = node.getProp(name) orelse return null;
+    return std.mem.trimEnd(u8, p.data, "\u{0}");
+}
+
+/// 给 `images/*/signature-*` 节点写签名（等价 `itbimage._sign.sign_images`）。
+///
+/// - 支持 `algo = "sha256,rsa2048"`（其它哈希/算法报 `UnsupportedAlgo`）；
+/// - 私钥取 `{keydir}/{key-name-hint}.key`（PEM 或 DER）；
+/// - 写入 `value`（签名本身）、`signer-name`/`signer-version`（带结尾 NUL 的字符串）、`timestamp`。
+pub fn signImages(
+    self: *Parsed,
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    keydir: []const u8,
+    timestamp: u32,
+) !usize {
+    const images = findChild(self.root, "images") orelse return 0;
+    const a = self.arena.allocator();
+    var signed: usize = 0;
+
+    for (images.children.items) |img| {
+        const data_prop = img.getProp("data") orelse continue;
+        const data = data_prop.data;
+        if (data.len == 0) continue;
+
+        for (img.children.items) |sub| {
+            if (!std.mem.startsWith(u8, sub.name, "signature")) continue;
+            const algo = propString(sub, "algo") orelse continue;
+            const hint = propString(sub, "key-name-hint") orelse continue;
+
+            // 只支持 sha256 + rsa
+            if (!std.mem.startsWith(u8, algo, "sha256")) return error.UnsupportedAlgo;
+
+            const key_path = try std.fmt.allocPrint(allocator, "{s}/{s}.key", .{
+                std.mem.trimEnd(u8, keydir, "/\\"), hint,
+            });
+            defer allocator.free(key_path);
+            const key_bytes = std.Io.Dir.cwd().readFileAlloc(io, key_path, allocator, .unlimited) catch
+                return error.MissingKey;
+            defer allocator.free(key_bytes);
+
+            var key = try rsa.parsePrivate(allocator, key_bytes);
+            defer key.deinit(allocator);
+            const sig = try rsa.signSha256(allocator, &key, data);
+            defer allocator.free(sig);
+
+            try setBytesProp(sub, a, "value", sig);
+            const name_bytes = try allocator.dupe(u8, "mkimage\x00");
+            defer allocator.free(name_bytes);
+            try setBytesProp(sub, a, "signer-name", name_bytes);
+            const ver_bytes = try allocator.dupe(u8, "1.0.0\x00");
+            defer allocator.free(ver_bytes);
+            try setBytesProp(sub, a, "signer-version", ver_bytes);
+            try setU32Prop(sub, a, "timestamp", timestamp);
+            signed += 1;
+        }
+    }
+    return signed;
+}
+
+fn setBytesProp(node: *Node, allocator: std.mem.Allocator, name: []const u8, value: []const u8) !void {
+    const copy = try allocator.dupe(u8, value);
+    for (node.props.items) |*p| {
+        if (std.mem.eql(u8, p.name, name)) {
+            p.data = copy;
+            return;
+        }
+    }
+    try node.props.append(allocator, .{ .name = name, .data = copy });
+}
 fn alignForward(x: usize, y: usize) usize {
     return ((x + y - 1) / y) * y;
 }
@@ -594,7 +667,8 @@ fn postProcess(node: *Node, inherited_data: ?[]const u8, allocator: std.mem.Allo
     var payload = inherited_data;
     if (node.getProp("data")) |p| payload = p.data;
 
-    if (std.mem.startsWith(u8, node.name, "signature") or std.mem.eql(u8, node.name, "cipher")) {
+    if (std.mem.startsWith(u8, node.name, "cipher")) {
+        // 图像加密（AES-CBC/CTR/ChaCha20）仍未实现；signature* 节点保留，值由 signImages() 填。
         return error.SigningOrEncryptionNotSupported;
     }
 
@@ -742,18 +816,32 @@ test "ITS 解析：字符串/单元/incbin/hash/timestamp" {
     try std.testing.expectEqualStrings("timestamp", parsed.root.props.items[0].name);
 }
 
-test "ITS 签名/加密节点明确拒绝" {
+test "ITS cipher 节点明确拒绝（signature 节点允许，值由 signImages 填）" {
     const allocator = std.testing.allocator;
     var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
 
-    const text =
-        \\/dts-v1/;
-        \\/ { images { seg0 { data = [01 02]; signature-1 { algo = "sha256"; }; }; }; };
+    const cipher_text =
+        \\/ { images { seg0 { data = [01 02]; cipher-1 { algo = "aes-128-cbc"; }; }; }; };
         \\
     ;
-    try std.testing.expectError(error.SigningOrEncryptionNotSupported, parseText(allocator, io, text, "."));
+    try std.testing.expectError(
+        error.SigningOrEncryptionNotSupported,
+        parseText(allocator, io, cipher_text, "."),
+    );
+
+    // signature-* 节点不再报错（未给 keydir 时与参考一致：不填 value）
+    const sig_text =
+        \\/ { images { seg0 { data = [01 02]; signature-1 { algo = "sha256,rsa2048"; key-name-hint = "dev"; }; }; }; };
+        \\
+    ;
+    var parsed = try parseText(allocator, io, sig_text, ".");
+    defer parsed.deinit();
+    const images = findChild(parsed.root, "images") orelse return error.NoImages;
+    const seg = images.children.items[0];
+    const sig = seg.children.items[0];
+    try std.testing.expect(sig.getProp("value") == null);
 }
 
 test "ITS 外部数据：data 挪出 FIT，写 data-offset/data-size/data-position" {

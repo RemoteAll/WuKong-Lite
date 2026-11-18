@@ -75,6 +75,21 @@ fn readFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited) catch Error.MissingFile;
 }
 
+/// 解析目录：先 datadir/name，再按原样（参考的 `get_file_path(name, datadir)`）。
+fn resolveDirIn(allocator: std.mem.Allocator, io: std.Io, datadir: []const u8, name: []const u8) ![]u8 {
+    const joined = try joinPath(allocator, datadir, name);
+    if (std.Io.Dir.cwd().statFile(io, joined, .{})) |_| {
+        return joined;
+    } else |_| {
+        allocator.free(joined);
+    }
+    if (std.Io.Dir.cwd().statFile(io, name, .{})) |_| {
+        return try allocator.dupe(u8, name);
+    } else |_| {
+        return Error.MissingFile;
+    }
+}
+
 fn writeOut(io: std.Io, datadir: []const u8, name: []const u8, data: []const u8) !void {
     var buf: [1024]u8 = undefined;
     const path = std.fmt.bufPrint(&buf, "{s}{s}{s}", .{
@@ -140,14 +155,21 @@ fn runItb(
         const name = e.key_ptr.*;
         const obj = image_cfg.asObject(e.value_ptr.*) orelse return Error.BadConfig;
         const its_name = image_cfg.getStr(obj, "its") orelse return Error.BadConfig;
-        // 参考 `itb_create_image(..., keydir, dtbname)` 会用 keydir 做 FIT 签名/图像加密，
-        // 我们尚未实现（backlog P1-10）——宁可报错，也不能静默产出未签名 FIT。
-        if (image_cfg.getStr(obj, "keydir") != null) return Error.UnsupportedProc;
         const its_path = try resolveIn(allocator, io, datadir, its_name);
         defer allocator.free(its_path);
 
         var parsed = try its.parse(allocator, io, its_path);
         defer parsed.deinit();
+        // 条目带 keydir 时做 FIT 图像签名（等价 itb_create_image(..., keydir)）：
+        // 目前只支持 `algo = sha256,rsa*`；图像加密（cipher）仍未实现。
+        if (image_cfg.getStr(obj, "keydir")) |kdir| {
+            const key_dir = try resolveDirIn(allocator, io, datadir, kdir);
+            defer allocator.free(key_dir);
+            _ = its.signImages(&parsed, allocator, io, key_dir, timestamp) catch |err| switch (err) {
+                error.MissingKey => return Error.MissingFile,
+                else => return err,
+            };
+        }
         // mk_image.py 的 itb_create_image() 固定 external_data=True + block_align=0x800
         const blob = try parsed.buildFdtExternal(allocator, timestamp, 0x800);
         defer allocator.free(blob);

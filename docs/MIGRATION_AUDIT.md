@@ -58,7 +58,7 @@
 
 | 官方 | 已做 | 缺口 |
 |------|------|------|
-| `mkimage` 签名/加密 | `src/tools/aicboot.zig` + `wk image aicimage`：AIC 头 v2 的 `sign_algo`/`enc_algo`/iv 区间联动、RSA-2048 与 HMAC-SHA256 签名、AES-128-CBC（含 SSK 派生密钥）、MD5+校验和；6 组与 `mk_image.py -p` **逐字节一致**（2026-11-19）。`itb` 外部数据（`-E`）+ 0x800 块对齐也已对齐（`its.buildFdtExternal`，结构对拍通过） | ITS `signature*`/`cipher` 节点：**由 SDK 的纯 Python `itbimage` 实现**（`_sign.py` RSA/SM2、`_cipher.py` AES-CBC/CTR/ChaCha20），`mkimage.exe` 本身不支持。我们的 `its.zig` 尚未实现这两类节点（当前直接报错） |
+| `mkimage` 签名/加密 | `src/tools/aicboot.zig` + `wk image aicimage`：AIC 头 v2 的 `sign_algo`/`enc_algo`/iv 区间联动、RSA-2048 与 HMAC-SHA256 签名、AES-128-CBC（含 SSK 派生密钥）、MD5+校验和；6 组与 `mk_image.py -p` **逐字节一致**（2026-11-19）。`itb` 外部数据（`-E`）+ 0x800 块对齐也已对齐（`its.buildFdtExternal`，结构对拍通过）；FIT **图像级签名**（`images/*/signature-*`，RSA-2048/SHA-256）签名值与参考逐字节一致（2026-11-19） | ITS 剩余：`sign_configurations`（FDT 区域哈希签名）、`cipher` 图像加密（AES-CBC/CTR/ChaCha20）、公钥注入（`-K`）。参考实现是 SDK 的纯 Python `itbimage`（`_sign.py` / `_cipher.py` / `_fdt_regions.py`），`mkimage.exe` 本身不支持 |
 | `aic_build.py` | Kconfig→build_plan→codegen | SCons 全量构建、链接脚本/工具链选择、镜像后处理流水线 |
 | 官方文档 | aiburn 技能 | `topics/` 464 篇、`images/`、`webhelp/` 未迁（体积原因，可按需） |
 | 板级方案 | 1 个 Kconfig 方案 | d12x/d21x/多板 `target` 与 `pack/image_cfg.json` |

@@ -344,7 +344,7 @@ $py = 'C:\Users\qcjxb\AppData\Local\Programs\Python\Python312\python.exe'
 if (-not (Test-Path $py)) { $py = (Get-Command python -ErrorAction SilentlyContinue).Source }
 if ($py -and (Test-Path $py)) {
     $env:PYTHONIOENCODING = 'utf-8'
-    foreach ($script in @('check_upg_send.py', 'check_upg_timeout.py', 'check_aicimage.py', 'check_preproc.py', 'check_envparts.py')) {
+    foreach ($script in @('check_upg_send.py', 'check_upg_timeout.py', 'check_aicimage.py', 'check_preproc.py', 'check_envparts.py', 'check_fitsign.py')) {
         $path = Join-Path $repo ('tools\checks\' + $script)
         if (-not (Test-Path $path)) { Case-Skip $script '脚本缺失'; continue }
         $text = (& $py $path 2>&1 | Out-String)

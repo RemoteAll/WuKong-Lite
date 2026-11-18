@@ -49,7 +49,7 @@ wk upg decode -i frame.bin
   无法验证的必须明确标注“未实现/未验证”，不得声称等价。
 - **分档验证**：`zig build test` → `zig build` → 单点实跑；不随意打包/全量同步。
 - **一键回归（改动即跑）**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\regression.ps1`
-  （构建 → 115 单测 → 53 条 CLI 用例（顶层 12 + image 29 + fs/upg 12）→ 5 个对拍脚本；
+  （构建 → 115 单测 → 53 条 CLI 用例（顶层 12 + image 29 + fs/upg 12）→ 6 个对拍脚本；
   退出码 0/1，报告落 `artifacts/regression/report-<时间戳>.txt`；阈值只能抬高）。新增功能必须同步加用例，
   **不得为了变绿而改实现或改断言**；确实无法自动化的要留 `SKIP` + 原因，禁止静默跳过。
 - **中文提交**：`type(scope): 中文主题`；用 `git commit -F <UTF-8 文件>`，不要 `-m "中文"`。
