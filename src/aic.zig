@@ -52,3 +52,4 @@ pub const pack = @import("tools/pack.zig");
 test {
     @import("std").testing.refAllDecls(@This());
 }
+pub const upg_client = @import("tools/upg_client.zig");

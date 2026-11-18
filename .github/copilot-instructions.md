@@ -39,6 +39,7 @@ wk sdk-update --root <SDK根目录> [--write]                          # sdk_upd
 wk rtt2freertos <rt-thread_defconfig> [-o out]                      # rtt2freertos.py
 wk upg frame --cmd 0x31 --payload '{"v":"1.0"}'                    # upgcmd 帧协议
 wk upg burn --image x.img [--no-reboot] [--partition all]            # upg 请求（载荷对拍参考客户端）
+wk upg proto-version --send --server-port 9100                       # TCP 会话（upgcmd server）
 wk upg decode -i frame.bin
 ```
 

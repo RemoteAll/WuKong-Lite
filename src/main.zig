@@ -34,6 +34,7 @@ const sdk_update = aic.sdk_update;
 const rtt2freertos = aic.rtt2freertos;
 const upg_frame = aic.upg_frame;
 const upg_payload = aic.upg_payload;
+const upg_client = aic.upg_client;
 const panic = aic.panic;
 const preboot = aic.preboot;
 const privres = aic.privres;
@@ -384,7 +385,8 @@ fn cmdUpg(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std
                 "       wk upg burn --image <path> [--no-reboot] [--partition all]\n" ++
                 "       wk upg send-cmd --command <text>\n" ++
                 "       wk upg get-log [--timeout N]\n" ++
-                "       wk upg upload-start --file <path> [--remote-dir <dir>]\n",
+                "       wk upg upload-start --file <path> [--remote-dir <dir>]\n" ++
+                "       （以上请求可加 --send 直连 upgcmd server：--server-host 127.0.0.1 --server-port 9100）\n",
         );
         return error.MissingArgument;
     }
@@ -450,6 +452,13 @@ fn cmdUpg(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std
     };
     const out_path = getOpt(rest, "--output") orelse getOpt(rest, "-o");
 
+    // `--send` 时直接与 upgcmd server 会话（默认 127.0.0.1:9100）。
+    // 注意：设备端口用 `--port`，服务端端口用 `--server-port`，避免同名。
+    const net: ?upg_client.NetOptions = if (hasFlag(rest, "--send")) .{
+        .host = getOpt(rest, "--server-host") orelse "127.0.0.1",
+        .port = if (getOpt(rest, "--server-port")) |v| (std.fmt.parseInt(u16, v, 0) catch return error.InvalidArgument) else 9100,
+    } else null;
+
     const simple = [_]struct { name: []const u8, cmd: u8 }{
         .{ .name = "heartbeat", .cmd = upg_frame.Cmd.heartbeat },
         .{ .name = "proto-version", .cmd = upg_frame.Cmd.proto_version },
@@ -463,7 +472,7 @@ fn cmdUpg(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std
         if (!std.mem.eql(u8, sub, s.name)) continue;
         const payload = try upg_payload.taskOnly(aa, task_id);
         defer aa.free(payload);
-        try emitUpgFrame(io, aa, out, s.cmd, payload, out_path, s.name);
+        try emitUpgFrame(io, aa, out, s.cmd, payload, out_path, s.name, net);
         return;
     }
 
@@ -475,7 +484,7 @@ fn cmdUpg(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std
             0;
         const payload = try upg_payload.configDevice(aa, task_id, port, baud);
         defer aa.free(payload);
-        try emitUpgFrame(io, aa, out, upg_frame.Cmd.config_device, payload, out_path, "config-device");
+        try emitUpgFrame(io, aa, out, upg_frame.Cmd.config_device, payload, out_path, "config-device", net);
         return;
     }
 
@@ -492,7 +501,7 @@ fn cmdUpg(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std
             partition_mode,
         );
         defer aa.free(payload);
-        try emitUpgFrame(io, aa, out, upg_frame.Cmd.burn_image, payload, out_path, "burn");
+        try emitUpgFrame(io, aa, out, upg_frame.Cmd.burn_image, payload, out_path, "burn", net);
         return;
     }
 
@@ -500,7 +509,7 @@ fn cmdUpg(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std
         const command = getOpt(rest, "--command") orelse getOpt(rest, "-c") orelse return error.MissingArgument;
         const payload = try upg_payload.sendCmd(aa, task_id, command);
         defer aa.free(payload);
-        try emitUpgFrame(io, aa, out, upg_frame.Cmd.send_cmd, payload, out_path, "send-cmd");
+        try emitUpgFrame(io, aa, out, upg_frame.Cmd.send_cmd, payload, out_path, "send-cmd", net);
         return;
     }
 
@@ -511,7 +520,7 @@ fn cmdUpg(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std
             5;
         const payload = try upg_payload.getLog(aa, task_id, timeout);
         defer aa.free(payload);
-        try emitUpgFrame(io, aa, out, upg_frame.Cmd.get_log, payload, out_path, "get-log");
+        try emitUpgFrame(io, aa, out, upg_frame.Cmd.get_log, payload, out_path, "get-log", net);
         return;
     }
 
@@ -524,7 +533,7 @@ fn cmdUpg(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std
         const remote_dir = getOpt(rest, "--remote-dir") orelse "C:\\temp\\aicupg_firmware\\";
         const payload = try upg_payload.uploadFirmware(aa, std.fs.path.basename(file), stat.size, remote_dir);
         defer aa.free(payload);
-        try emitUpgFrame(io, aa, out, upg_frame.Cmd.upload_firmware, payload, out_path, "upload-start");
+        try emitUpgFrame(io, aa, out, upg_frame.Cmd.upload_firmware, payload, out_path, "upload-start", net);
         return;
     }
 
@@ -532,7 +541,7 @@ fn cmdUpg(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std
     return error.UnknownCommand;
 }
 
-/// 打印（并按需落盘）一帧：与 `wk upg frame` 的输出格式一致。
+/// 打印（并按需落盘）一帧；给了 `net` 就发到 upgcmd server 并打印响应。
 fn emitUpgFrame(
     io: std.Io,
     aa: std.mem.Allocator,
@@ -541,6 +550,7 @@ fn emitUpgFrame(
     payload: []const u8,
     out_path: ?[]const u8,
     label: []const u8,
+    net: ?upg_client.NetOptions,
 ) !void {
     const frame = try upg_frame.encode(aa, cmd, payload);
     defer aa.free(frame);
@@ -550,6 +560,32 @@ fn emitUpgFrame(
     }
     for (frame) |b| try out.print("{x:0>2}", .{b});
     try out.writeAll("\n");
+
+    const opt = net orelse return;
+    var session = upg_client.Session.connect(aa, io, opt) catch |err| {
+        try out.print("upg: 连接 {s}:{d} 失败（{s}）\n", .{ opt.host, opt.port, @errorName(err) });
+        return err;
+    };
+    defer session.deinit();
+
+    const resp = session.request(aa, cmd, payload) catch |err| {
+        try out.print(
+            "upg: 请求 cmd=0x{x:0>2} 失败（{s}；host={s}:{d}）\n",
+            .{ cmd, @errorName(err), opt.host, opt.port },
+        );
+        return err;
+    };
+    defer aa.free(resp);
+
+    try out.print("resp: cmd=0x{x:0>2} payload={d} B\n", .{ cmd | upg_frame.Cmd.rsp_mask, resp.len });
+    if (resp.len > 0) {
+        if (std.unicode.utf8ValidateSlice(resp)) {
+            try out.print("{s}\n", .{resp});
+        } else {
+            for (resp) |b| try out.print("{x:0>2}", .{b});
+            try out.writeAll("\n");
+        }
+    }
 }
 
 fn cmdFs(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std.Io.Writer) !void {

@@ -10,7 +10,7 @@
 |----|------|------|----------|------|
 | P0-1 | bootloader/PBP 资源打包（`mk_prebootprog.py`、`mk_private_resource.py`、`spienc`） | 🟡 | PBP/私有资源均与参考逐字节一致 | `mk_prebootprog`、`mk_private_resource` 已完成；spienc 保留官方 |
 | P0-2 | RTOS 内核（rt-thread/freertos/ucos-ii）与 HAL 驱动 | ⏸ | 官方 SDK | 同上；本仓库只做 OSAL/设备框架模拟 |
-| P0-3 | 主机烧写协议（upgcmd 源码 / UART USB 客户端） | 🟡 | 帧层 + **高层请求载荷**均与参考 `aicupg_client.py` 逐字节一致（2026-11-18） | 主机源码未公开；已实现 `upg_frame`（AA55/CRC16-CCITT/55AA）与 `upg_payload`（task_id/params 形状、`json.dumps` 空格与转义规则），CLI：`wk upg frame|decode|heartbeat|proto-version|hw-info|device-list|upload-dir|cancel|help|config-device|burn|send-cmd|get-log|upload-start`；**传输（串口/TCP）与会话状态机待做**；`upgcmd -e` 可作对照 |
+| P0-3 | 主机烧写协议（upgcmd 源码 / UART USB 客户端） | 🟡 | 帧层/请求载荷与参考逐字节一致；**TCP 会话已跑通 mock server**（2026-11-18） | 已实现 `upg_frame`（AA55/CRC16-CCITT/55AA）、`upg_payload`（与 `json.dumps` 逐字节对齐）、`upg_client`（TCP 连 9100，一问一答 + 响应 cmd 校验）；CLI `wk upg … --send [--server-host/--server-port]`。**待做**：串口传输、分块上传循环与进度回执、真实 upgcmd server/设备联调 |
 | P0-4 | 上游文档同步机制 | ✅ | `tools/sync-upstream.ps1 -Check` 退出 0 | 2026-11-17 建立，10 个文件 + `UPSTREAM.json` |
 
 ## P1 · 镜像与安全
