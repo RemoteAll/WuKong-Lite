@@ -1,5 +1,8 @@
 # 烧写到芯片模组（官方 upgcmd 路径）
 
+> 需要直接构建并烧录 D13x demo88-nor 的 LVGL V9 界面固件时，见
+> [`docs/LVGL_FIRMWARE.md`](LVGL_FIRMWARE.md)（含构建命令、镜像路径与 USB/UART 烧录步骤）。
+
 Luban-Lite 的官方烧写文档在 `doc/skills/aiburn/`，已原样迁移到
 `docs/official/skills/aiburn/`。实际烧写工具有两条路：
 
