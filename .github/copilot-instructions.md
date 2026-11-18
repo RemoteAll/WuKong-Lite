@@ -23,7 +23,7 @@
 
 ```powershell
 zig build              # 构建 wk.exe
-zig build test         # 115 项单测
+zig build test         # 118 项单测
 .\zig-out\bin\wk.exe   # 查看命令
 wk image flashpack --payload-dir payload --out-dir flash
 powershell -File tools\fetch-upgcmd-deps.ps1 -SdkRoot G:\Code\C\luban-lite
@@ -41,6 +41,9 @@ wk upg frame --cmd 0x31 --payload '{"v":"1.0"}'                    # upgcmd 帧�
 wk upg burn --image x.img [--no-reboot] [--partition all]            # upg 请求（载荷对拍参考客户端）
 wk upg proto-version --send --server-port 9100                       # TCP 会话（upgcmd server）
 wk upg decode -i frame.bin
+wk image aicimage -c image_cfg.json -d data [-k keys]                # AIC 启动镜像 v2（签名/加密）
+wk image preproc  -c image_cfg.json -d data [-k keys]                 # pre-process 整条流水线
+wk image itb --its x.its [--keydir keys]                              # ITS→FIT（可加密+签名）
 ```
 
 ## 4. 编码与验证纪律
@@ -49,7 +52,7 @@ wk upg decode -i frame.bin
   无法验证的必须明确标注“未实现/未验证”，不得声称等价。
 - **分档验证**：`zig build test` → `zig build` → 单点实跑；不随意打包/全量同步。
 - **一键回归（改动即跑）**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\regression.ps1`
-  （构建 → 115 单测 → 53 条 CLI 用例（顶层 12 + image 29 + fs/upg 12）→ 6 个对拍脚本；
+  （构建 → 118 单测 → 53 条 CLI 用例（顶层 12 + image 29 + fs/upg 12）→ 7 个对拍脚本；
   退出码 0/1，报告落 `artifacts/regression/report-<时间戳>.txt`；阈值只能抬高）。新增功能必须同步加用例，
   **不得为了变绿而改实现或改断言**；确实无法自动化的要留 `SKIP` + 原因，禁止静默跳过。
 - **中文提交**：`type(scope): 中文主题`；用 `git commit -F <UTF-8 文件>`，不要 `-m "中文"`。

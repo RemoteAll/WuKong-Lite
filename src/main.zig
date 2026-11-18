@@ -646,7 +646,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image pack --config <json> [--datadir <dir>] [-o out.img] [--compare <ref.img>]
         \\            或 --sdk-output <C-SDK-images-dir>（自动取其中的 image_cfg.json 与组件）
         \\  image itb --kernel <bin> [--fdt <dtb>] [--ramdisk <bin>] [--load 0x...] [--entry 0x...] [-o out.itb]
-        \\            或 --its <xxx.its> [--timestamp <u32>] [-o out.itb]
+        \\            或 --its <xxx.its> [--keydir <dir>] [--timestamp <u32>] [-o out.itb]
         \\  image pagetable --input <spl.bin> [--page 2] [--block 128] [--planes 1] [-o page.bin]
         \\  image crypt --input <bin> --key <32hex> --iv <32hex> [--decrypt] [--pad zero|pkcs7] [-o out.bin]
         \\  image fitinfo --input <itb> [--dump] [--verify]
@@ -1248,6 +1248,14 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
             defer parsed.deinit();
 
             const timestamp = parseOptionalU32(rest, "--timestamp") orelse currentTimestamp(io);
+            // 与参考 build_itb 同序：先 cipher（密文覆盖 hash 值）再签名。
+            if (getOpt(rest, "--keydir") orelse getOpt(rest, "-k")) |keydir| {
+                const encrypted = try its.cipherImages(&parsed, aa, io, keydir);
+                const signed = try its.signImages(&parsed, aa, io, keydir, timestamp);
+                if (encrypted + signed > 0) {
+                    try out.print("加密 {d} 个镜像 / 签名 {d} 个镜像（keydir={s}）\n", .{ encrypted, signed, keydir });
+                }
+            }
             const blob = try parsed.buildFdt(aa, timestamp);
             defer aa.free(blob);
 

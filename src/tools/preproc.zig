@@ -160,11 +160,15 @@ fn runItb(
 
         var parsed = try its.parse(allocator, io, its_path);
         defer parsed.deinit();
-        // 条目带 keydir 时做 FIT 图像签名（等价 itb_create_image(..., keydir)）：
-        // 目前只支持 `algo = sha256,rsa*`；图像加密（cipher）仍未实现。
+        // 条目带 keydir 时先做图像加密、再做签名（与参考 build_itb 的顺序一致：
+        // cipher → 计算 hash → 签名），哈希在 cipherImages 里已按密文重算。
         if (image_cfg.getStr(obj, "keydir")) |kdir| {
             const key_dir = try resolveDirIn(allocator, io, datadir, kdir);
             defer allocator.free(key_dir);
+            _ = its.cipherImages(&parsed, allocator, io, key_dir) catch |err| switch (err) {
+                error.MissingKey => return Error.MissingFile,
+                else => return err,
+            };
             _ = its.signImages(&parsed, allocator, io, key_dir, timestamp) catch |err| switch (err) {
                 error.MissingKey => return Error.MissingFile,
                 else => return err,

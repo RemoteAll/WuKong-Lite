@@ -24,7 +24,7 @@
 | P1-5 | `encrypt_rsa_key.py` | ✅ | `wk image rsakey` 与参考脚本**逐字节一致**（私钥 AES/DES 加密、公钥 PKCS#1/SPKI 四种组合） | 2026-11-18 完成；公钥+对称密钥参考脚本自身会崩，我们按语义实现并写明差异 |
 | P1-6 | AIC 启动镜像 v2 签名/加密 | ✅ | `wk image aicimage` 与 `mk_image.py -p` **6 组镜像逐字节一致**（RSA-2048/HMAC、AES-128-CBC 含 SSK 派生、MD5+校验和、with_ext） | 2026-11-19 完成。未支持：SM2/SM4/ChaCha20/AES-CTR、pbp2/private2（遇配置即报错） |
 | P1-9 | `pre-process` 流水线（`wk image preproc`） | ✅ | `priv.bin`/`env.bin`/`loader.aic` 与 `mk_image.py -p` **逐字节一致**；`kernel.itb` 结构对拍一致；env 分区前缀（offset/UBI/GPT）3 种媒体全部逐字节一致 | 2026-11-19 完成（`src/tools/preproc.zig`）。已修：分区 offset 必须**原样**输出（`@0x4400`）且 UBI 卷 offset 不能丢；`itb` 条目带 `keydir` 时**报错**（FIT 签名未实现，P1-10）。未实现：`elf2itb`、`aicboot`(v1 遗留)、`spienc`/`spienctool`/`data_crypt`（厂商预编译 exe） |
-| P1-10 | ITS `signature*`/`cipher` 节点（FIT 签名/图像加密） | 🟡 | `images/*/signature-*` 的 RSA-2048 签名与参考 **逐字节一致**（`check_fitsign.py`） | 2026-11-19：图像级签名已完成（`its.signImages`，只支持 `sha256,rsa*`）。**待做**：`sign_configurations`（FDT 区域哈希签名）、`cipher` 图像加密（AES-CBC/CTR/ChaCha20）、公钥注入（`-K`） |
+| P1-10 | ITS `signature*`/`cipher` 节点（FIT 签名/图像加密） | 🟡 | 图像签名与图像加密都与参考**逐字节一致**：`check_fitsign.py`（RSA-2048 签名值）、`check_fitcipher.py`（5 种算法密文/iv/hash） | 2026-11-19：✅ `its.signImages`（`sha256,rsa*`）+ ✅ `its.cipherImages`（`aes128/aes192/aes256` CBC+PKCS7、`aes-128-ctr`、`chacha20`；keydir 取 `{hint}.bin`，缺 `iv-name-hint` 则随机并回写 `iv`）。Zig 0.17 无 AES-192，已按 FIPS-197 自实现并用官方向量验证。**待做**：`sign_configurations`（FDT 区域哈希签名）、公钥注入（`-K`） |
 | P1-7 | `mkcpio` OTA（`ota-subimgs.cfg`、`ota_info.bin`、尺寸回填） | ✅ | `wk image ota` 生成 512B env + crc cpio；`cpio.exe -it` 可列出；size 回填实测 1024 | 2026-11-17 完成 |
 | P1-8 | `simg_dump` 等价 CLI | ✅ | `wk image simg --dump` 输出头/chunk 表，单测覆盖 | 2026-11-17 完成 |
 

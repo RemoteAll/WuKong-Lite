@@ -204,6 +204,269 @@ fn setBytesProp(node: *Node, allocator: std.mem.Allocator, name: []const u8, val
     }
     try node.props.append(allocator, .{ .name = name, .data = copy });
 }
+/// 读 `{keydir}/{hint}.bin`（参考 `_cipher._read_binary_file`）。
+fn readKeyBin(allocator: std.mem.Allocator, io: std.Io, keydir: []const u8, hint: []const u8) ![]u8 {
+    const path = try std.fmt.allocPrint(allocator, "{s}/{s}.bin", .{
+        std.mem.trimEnd(u8, keydir, "/\\"), hint,
+    });
+    defer allocator.free(path);
+    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited) catch error.MissingKey;
+}
+
+/// AES-CTR（PyCryptodome 语义：128 位大端计数器，从 IV 整数值开始，无填充）。
+fn aesCtr(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    key: [16]u8,
+    iv: [16]u8,
+) ![]u8 {
+    const out = try allocator.alloc(u8, data.len);
+    errdefer allocator.free(out);
+    var ctx = std.crypto.core.aes.Aes128.initEnc(key);
+    var counter: u128 = std.mem.readInt(u128, &iv, .big);
+    var off: usize = 0;
+    while (off < data.len) : (off += 16) {
+        var ctr_block: [16]u8 = undefined;
+        std.mem.writeInt(u128, &ctr_block, counter, .big);
+        var ks: [16]u8 = undefined;
+        ctx.encrypt(&ks, &ctr_block);
+        const n = @min(@as(usize, 16), data.len - off);
+        for (0..n) |i| out[off + i] = data[off + i] ^ ks[i];
+        counter +%= 1;
+    }
+    return out;
+}
+
+/// Zig 0.17 的 `std.crypto.aes` 只提供 `Aes128` / `Aes256`，没有 192 位密钥版本；
+/// 参考实现支持 `aes192`，此处按 FIPS-197 自行实现（字节序密钥扩展 + 12 轮，单块）。
+fn aes192EncryptBlock(ek: *const [208]u8, block: *[16]u8) void {
+    // addRoundKey(0)
+    for (0..16) |i| block[i] ^= ek[i];
+
+    var round: u8 = 1;
+    while (round <= 12) : (round += 1) {
+        // SubBytes + ShiftRows（state[r][c] 线性化为 s[r + 4c]）
+        var t: [16]u8 = undefined;
+        for (0..4) |r| {
+            for (0..4) |c| {
+                t[r + 4 * c] = AES_SBOX[block[r + 4 * ((c + r) % 4)]];
+            }
+        }
+        // MixColumns（最后一轮不做）
+        if (round != 12) {
+            for (0..4) |c| {
+                const a0 = t[4 * c + 0];
+                const a1 = t[4 * c + 1];
+                const a2 = t[4 * c + 2];
+                const a3 = t[4 * c + 3];
+                t[4 * c + 0] = xtime(a0) ^ (xtime(a1) ^ a1) ^ a2 ^ a3;
+                t[4 * c + 1] = a0 ^ xtime(a1) ^ (xtime(a2) ^ a2) ^ a3;
+                t[4 * c + 2] = a0 ^ a1 ^ xtime(a2) ^ (xtime(a3) ^ a3);
+                t[4 * c + 3] = (xtime(a0) ^ a0) ^ a1 ^ a2 ^ xtime(a3);
+            }
+        }
+        // addRoundKey(round)
+        const off = @as(usize, round) * 16;
+        for (0..16) |i| block[i] = t[i] ^ ek[off + i];
+    }
+}
+
+fn xtime(x: u8) u8 {
+    const hi: u8 = if (x & 0x80 != 0) 0x1b else 0;
+    return (x << 1) ^ hi;
+}
+
+/// AES-192 密钥扩展（Nk=6 / Nr=12 → 52 字 = 208 字节）。
+fn aes192ExpandKey(key: *const [24]u8) [208]u8 {
+    var ek: [208]u8 = undefined;
+    @memcpy(ek[0..24], key);
+
+    var rcon: u8 = 0x01;
+    var i: usize = 6;
+    while (i < 52) : (i += 1) {
+        var t: [4]u8 = ek[(i - 1) * 4 ..][0..4].*;
+        if (i % 6 == 0) {
+            // 先把旧值取到局部：`t = .{ ...t[0]... }` 会按结果位置逐元素写回，
+            // 第 4 个元素读到的是刚被覆盖的 t[0]（实测得到错密钥）。
+            const b0 = t[0];
+            const b1 = t[1];
+            const b2 = t[2];
+            const b3 = t[3];
+            t = .{ AES_SBOX[b1] ^ rcon, AES_SBOX[b2], AES_SBOX[b3], AES_SBOX[b0] };
+            rcon = xtime(rcon);
+        }
+        for (0..4) |j| ek[i * 4 + j] = ek[(i - 6) * 4 + j] ^ t[j];
+    }
+    return ek;
+}
+
+/// AES-CBC + PKCS7（支持 128/192/256 位密钥）。
+fn aesCbcPkcs7(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    key: []const u8,
+    iv: [16]u8,
+) ![]u8 {
+    const pad_len: usize = 16 - (data.len % 16);
+    const padded = try allocator.alloc(u8, data.len + pad_len);
+    defer allocator.free(padded);
+    @memcpy(padded[0..data.len], data);
+    @memset(padded[data.len..], @intCast(pad_len));
+
+    const out = try allocator.alloc(u8, padded.len);
+    errdefer allocator.free(out);
+
+    var ek192: [208]u8 = undefined;
+    if (key.len == 24) ek192 = aes192ExpandKey(key[0..24]);
+
+    var prev = iv;
+    var i: usize = 0;
+    while (i < padded.len) : (i += 16) {
+        var block: [16]u8 = undefined;
+        for (0..16) |k| block[k] = padded[i + k] ^ prev[k];
+        switch (key.len) {
+            16 => {
+                var ctx = std.crypto.core.aes.Aes128.initEnc(key[0..16].*);
+                ctx.encrypt(out[i..][0..16], &block);
+            },
+            24 => {
+                // 自实现的 AES-192 直接在 block 上就地加密，需再拷回输出缓冲
+                aes192EncryptBlock(&ek192, &block);
+                @memcpy(out[i..][0..16], &block);
+            },
+            32 => {
+                var ctx = std.crypto.core.aes.Aes256.initEnc(key[0..32].*);
+                ctx.encrypt(out[i..][0..16], &block);
+            },
+            else => return error.UnsupportedAlgo,
+        }
+        @memcpy(&prev, out[i..][0..16]);
+    }
+    return out;
+}
+
+/// FIPS-197 图 2 的 S-box。
+const AES_SBOX = [256]u8{
+    0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
+    0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
+    0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
+    0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75,
+    0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84,
+    0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf,
+    0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8,
+    0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2,
+    0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73,
+    0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb,
+    0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79,
+    0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08,
+    0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a,
+    0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e,
+    0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
+    0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16,
+};
+
+fn loadOrRandomIv(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    keydir: []const u8,
+    hint: ?[]const u8,
+    want: usize,
+) ![]u8 {
+    if (hint) |h| {
+        const raw = try readKeyBin(allocator, io, keydir, h);
+        defer allocator.free(raw);
+        if (raw.len < want) return error.ShortIv;
+        return allocator.dupe(u8, raw[0..want]);
+    }
+    const iv = try allocator.alloc(u8, want);
+    // Zig 0.17 起随机源挂在 std.Io 上（`std.crypto.random` 已移除）。
+    io.random(iv);
+    return iv;
+}
+
+/// 图像数据加密（等价 `itbimage._cipher.cipher_images`）。
+///
+/// 支持 `aes128`/`aes192`/`aes256`（CBC+PKCS7）、`aes-128-ctr`、`chacha20`；
+/// 密钥/IV 取 `{keydir}/{hint}.bin`（iv-name-hint 缺省时随机生成并写回 `iv` 属性，
+/// 与参考一致，此时输出不可复现）。加密后重算该节点 `hash-*` 的 `value`（参考先加密后哈希）。
+pub fn cipherImages(
+    parsed: *Parsed,
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    keydir: []const u8,
+) !usize {
+    const images = findChild(parsed.root, "images") orelse return 0;
+    const a = parsed.arena.allocator();
+    var done: usize = 0;
+
+    for (images.children.items) |img| {
+        var cipher_node: ?*Node = null;
+        for (img.children.items) |sub| {
+            if (std.mem.startsWith(u8, sub.name, "cipher")) {
+                cipher_node = sub;
+                break;
+            }
+        }
+        const cnode = cipher_node orelse continue;
+        const data_prop = img.getProp("data") orelse continue;
+        const data = data_prop.data;
+        if (data.len == 0) continue;
+
+        const algo = propString(cnode, "algo") orelse return error.BadCipherNode;
+        const key_hint = propString(cnode, "key-name-hint") orelse return error.BadCipherNode;
+        const iv_hint = propString(cnode, "iv-name-hint");
+
+        const key_raw = try readKeyBin(allocator, io, keydir, key_hint);
+        defer allocator.free(key_raw);
+
+        var ciphertext: []u8 = undefined;
+        var iv_used: []u8 = undefined;
+
+        if (std.mem.eql(u8, algo, "aes128") or std.mem.eql(u8, algo, "aes192") or
+            std.mem.eql(u8, algo, "aes256"))
+        {
+            const key_size: usize = if (std.mem.eql(u8, algo, "aes128")) 16 else if (std.mem.eql(u8, algo, "aes192")) 24 else 32;
+            if (key_raw.len < key_size) return error.ShortKey;
+            const iv = try loadOrRandomIv(allocator, io, keydir, iv_hint, 16);
+            defer allocator.free(iv);
+            ciphertext = try aesCbcPkcs7(allocator, data, key_raw[0..key_size], iv[0..16].*);
+            iv_used = try allocator.dupe(u8, iv);
+        } else if (std.mem.eql(u8, algo, "aes-128-ctr")) {
+            if (key_raw.len < 16) return error.ShortKey;
+            const iv = try loadOrRandomIv(allocator, io, keydir, iv_hint, 16);
+            defer allocator.free(iv);
+            ciphertext = try aesCtr(allocator, data, key_raw[0..16].*, iv[0..16].*);
+            iv_used = try allocator.dupe(u8, iv);
+        } else if (std.mem.eql(u8, algo, "chacha20")) {
+            const ChaCha = std.crypto.stream.chacha.ChaCha20IETF;
+            if (key_raw.len < ChaCha.key_length) return error.ShortKey;
+            const nonce = try loadOrRandomIv(allocator, io, keydir, iv_hint, ChaCha.nonce_length);
+            defer allocator.free(nonce);
+            ciphertext = try allocator.alloc(u8, data.len);
+            ChaCha.xor(ciphertext, data, 0, key_raw[0..32].*, nonce[0..12].*);
+            iv_used = try allocator.dupe(u8, nonce);
+        } else {
+            return error.UnsupportedAlgo;
+        }
+        defer allocator.free(iv_used);
+        defer allocator.free(ciphertext);
+
+        try setBytesProp(img, a, "data", ciphertext);
+        try setU32Prop(img, a, "data-size-unciphered", @intCast(data.len));
+        try setBytesProp(cnode, a, "iv", iv_used);
+
+        for (img.children.items) |sub| {
+            if (!std.mem.startsWith(u8, sub.name, "hash-")) continue;
+            const algo_p = propString(sub, "algo") orelse continue;
+            const digest = try digestFor(allocator, algo_p, ciphertext);
+            defer allocator.free(digest);
+            try setBytesProp(sub, a, "value", digest);
+        }
+        done += 1;
+    }
+    return done;
+}
+
 fn alignForward(x: usize, y: usize) usize {
     return ((x + y - 1) / y) * y;
 }
@@ -667,10 +930,8 @@ fn postProcess(node: *Node, inherited_data: ?[]const u8, allocator: std.mem.Allo
     var payload = inherited_data;
     if (node.getProp("data")) |p| payload = p.data;
 
-    if (std.mem.startsWith(u8, node.name, "cipher")) {
-        // 图像加密（AES-CBC/CTR/ChaCha20）仍未实现；signature* 节点保留，值由 signImages() 填。
-        return error.SigningOrEncryptionNotSupported;
-    }
+    // `signature*` / `cipher*` 节点都保留：分别由 signImages() / cipherImages() 处理
+    // （未给 keydir 时与参考一致：不签名、不加密，数据保持明文）。
 
     if (std.mem.startsWith(u8, node.name, "hash-")) {
         if (node.getProp("algo")) |algo_prop| {
@@ -816,22 +1077,191 @@ test "ITS 解析：字符串/单元/incbin/hash/timestamp" {
     try std.testing.expectEqualStrings("timestamp", parsed.root.props.items[0].name);
 }
 
-test "ITS cipher 节点明确拒绝（signature 节点允许，值由 signImages 填）" {
-    const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+test "AES-192 密钥扩展与单块加密（FIPS-197 附录 C.2）" {
+    const key: [24]u8 = .{
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    };
+    const ek = aes192ExpandKey(&key);
+    const plain: [16]u8 = .{
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+        0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+    };
+    var block: [16]u8 = plain;
+    aes192EncryptBlock(&ek, &block);
+    const expect: [16]u8 = .{
+        0xdd, 0xa9, 0x7c, 0xa4, 0x86, 0x4c, 0xdf, 0xe0,
+        0x6e, 0xaf, 0x70, 0xa0, 0xec, 0x0d, 0x71, 0x91,
+    };
+    try std.testing.expectEqualSlices(u8, &expect, &block);
 
-    const cipher_text =
-        \\/ { images { seg0 { data = [01 02]; cipher-1 { algo = "aes-128-cbc"; }; }; }; };
+    // AES-192 的 CBC 路径不能因缺 algo 而退化成 128 位
+    const a = std.testing.allocator;
+    const iv: [16]u8 = @splat(0);
+    const out = try aesCbcPkcs7(a, &plain, &key, iv);
+    defer a.free(out);
+    // 16 字节数据 + 一整块 PKCS7 填充 = 32 字节密文
+    try std.testing.expectEqual(@as(usize, 32), out.len);
+    // IV 全零 ⇒ 首块应等于 FIPS-197 单块密文
+    try std.testing.expectEqualSlices(u8, &expect, out[0..16]);
+}
+
+test "ITS cipher：未给 keydir 保留节点；给了则加密并重算 hash" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    // 未给 keydir：节点保留、数据保持明文（与参考一致）
+    const plain_text =
+        \\/ { images { seg0 { data = [01 02]; cipher-1 { algo = "aes128"; }; }; }; };
         \\
     ;
+    var plain = try parseText(allocator, io, plain_text, ".");
+    defer plain.deinit();
+    const pimages = findChild(plain.root, "images") orelse return error.NoImages;
+    const pseg = pimages.children.items[0];
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2 }, pseg.getProp("data").?.data);
+    try std.testing.expect(pseg.getProp("data-size-unciphered") == null);
+
+    // 缺 algo 时明确报错
+    const bad_text =
+        \\/ { images { seg0 { data = [01 02]; cipher-1 { key-name-hint = "aes"; }; }; }; };
+        \\
+    ;
+    var bad = try parseText(allocator, io, bad_text, ".");
+    defer bad.deinit();
     try std.testing.expectError(
-        error.SigningOrEncryptionNotSupported,
-        parseText(allocator, io, cipher_text, "."),
+        error.BadCipherNode,
+        cipherImages(&bad, allocator, io, "."),
     );
 
-    // signature-* 节点不再报错（未给 keydir 时与参考一致：不填 value）
+    // 给了 keydir：aes128 + 固定 IV，密文/IV/未加密长度/hash 全部落盘可复核
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const keydir = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(keydir);
+
+    const key: [16]u8 = .{
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    };
+    const iv: [16]u8 = .{
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+    };
+    const key_path = try std.fmt.allocPrint(allocator, "{s}/aes.bin", .{keydir});
+    defer allocator.free(key_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = key_path, .data = &key });
+    const iv_path = try std.fmt.allocPrint(allocator, "{s}/iv.bin", .{keydir});
+    defer allocator.free(iv_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = iv_path, .data = &iv });
+
+    const enc_text =
+        \\/ { images { seg0 {
+        \\    data = [01 02 03];
+        \\    cipher-1 { algo = "aes128"; key-name-hint = "aes"; iv-name-hint = "iv"; };
+        \\    hash-1 { algo = "sha256"; };
+        \\}; }; };
+        \\
+    ;
+    var enc = try parseText(allocator, io, enc_text, ".");
+    defer enc.deinit();
+
+    const n = try cipherImages(&enc, allocator, io, keydir);
+    try std.testing.expectEqual(@as(usize, 1), n);
+
+    const eimages = findChild(enc.root, "images") orelse return error.NoImages;
+    const seg = eimages.children.items[0];
+    const body = seg.getProp("data").?;
+    try std.testing.expectEqual(@as(usize, 16), body.data.len); // 3 字节 → PKCS7 补到 16
+    // data-size-unciphered = 3（大端 u32）
+    const unciphered = seg.getProp("data-size-unciphered").?;
+    try std.testing.expectEqual(@as(u32, 3), std.mem.readInt(u32, unciphered.data[0..4], .big));
+    // IV 写回 cipher 节点
+    const cipher_node = seg.children.items[0];
+    try std.testing.expectEqualSlices(u8, &iv, cipher_node.getProp("iv").?.data);
+    // 密文 = AES-128-CBC(key, iv) 的 PKCS7 结果；hash-1 覆盖密文
+    const expect_ct = try aesCbcPkcs7(allocator, &.{ 1, 2, 3 }, &key, iv);
+    defer allocator.free(expect_ct);
+    try std.testing.expectEqualSlices(u8, expect_ct, body.data);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(body.data, &digest, .{});
+    try std.testing.expectEqualSlices(u8, &digest, seg.children.items[1].getProp("value").?.data);
+}
+
+test "ITS cipher：aes-128-ctr 与 chacha20 长度不变（无填充）" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const keydir = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(keydir);
+
+    const key16: [16]u8 = @splat(0x0f);
+    const key32: [32]u8 = @splat(0x2a);
+    const iv: [16]u8 = @splat(0x11);
+    const nonce: [12]u8 = @splat(0x33);
+    for ([_][]const u8{ "aes.bin", "cha.bin" }) |name| {
+        const p = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ keydir, name });
+        defer allocator.free(p);
+        try std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = p,
+            .data = if (std.mem.eql(u8, name, "aes.bin")) &key16 else &key32,
+        });
+    }
+    const iv_path = try std.fmt.allocPrint(allocator, "{s}/iv16.bin", .{keydir});
+    defer allocator.free(iv_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = iv_path, .data = &iv });
+    // ChaCha20 的 nonce 只有 12 字节
+    const nonce_path = try std.fmt.allocPrint(allocator, "{s}/nonce.bin", .{keydir});
+    defer allocator.free(nonce_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = nonce_path, .data = &nonce });
+
+    const text =
+        \\/ { images {
+        \\    a { data = [01 02 03 04 05]; cipher-1 { algo = "aes-128-ctr"; key-name-hint = "aes"; iv-name-hint = "iv16"; }; };
+        \\    b { data = [01 02 03 04 05]; cipher-1 { algo = "chacha20"; key-name-hint = "cha"; iv-name-hint = "nonce"; }; };
+        \\}; };
+        \\
+    ;
+    var parsed = try parseText(allocator, io, text, ".");
+    defer parsed.deinit();
+    _ = try cipherImages(&parsed, allocator, io, keydir);
+
+    const images = findChild(parsed.root, "images") orelse return error.NoImages;
+    for (images.children.items) |img| {
+        try std.testing.expectEqual(@as(usize, 5), img.getProp("data").?.data.len);
+        const u = img.getProp("data-size-unciphered").?;
+        try std.testing.expectEqual(@as(u32, 5), std.mem.readInt(u32, u.data[0..4], .big));
+    }
+    // CTR 期望值：把 IV 当 128 位大端计数器
+    const expect_ctr = try aesCtr(allocator, &.{ 1, 2, 3, 4, 5 }, key16, iv);
+    defer allocator.free(expect_ctr);
+    try std.testing.expectEqualSlices(
+        u8,
+        expect_ctr,
+        images.children.items[0].getProp("data").?.data,
+    );
+    // ChaCha20 期望值
+    var expect_chacha: [5]u8 = undefined;
+    std.crypto.stream.chacha.ChaCha20IETF.xor(
+        &expect_chacha,
+        &.{ 1, 2, 3, 4, 5 },
+        0,
+        key32,
+        nonce,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &expect_chacha,
+        images.children.items[1].getProp("data").?.data,
+    );
+}
+
+test "ITS signature-* 节点：未给 keydir 时不填 value（与参考一致）" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
     const sig_text =
         \\/ { images { seg0 { data = [01 02]; signature-1 { algo = "sha256,rsa2048"; key-name-hint = "dev"; }; }; }; };
         \\
