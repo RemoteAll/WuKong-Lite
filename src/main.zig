@@ -26,6 +26,7 @@ const merge = aic.merge;
 const ota = aic.ota;
 const linkaddr = aic.linkaddr;
 const linksize = aic.linksize;
+const partlist = aic.partlist;
 const flashpack = aic.flashpack;
 const fw_image = aic.fw_image;
 const image = aic.image;
@@ -150,6 +151,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image ota --ota-cfg <ota-subimgs.cfg> --image-cfg <image_cfg.json> [--input-dir <dir>] [--out-dir <dir>]
         \\  image linkaddr --config <.config> --input <image_cfg.json> [--output <json>]
         \\  image linksize --map <file.map> [--out-dir <dir>]
+        \\  image partlist --config <image_cfg.json> --output <partition_file_list.h>
         \\  image flashpack [--config <image_cfg.json>] [--payload-dir <dir>] [--out-dir <dir>]
         \\  image dump <file>
         \\
@@ -1084,6 +1086,25 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
             aa.free(result.dironly);
         }
         try out.print("linksize: 已生成 <base>.summary.csv / .detail.csv / .dironly.csv\n", .{});
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "partlist")) {
+        const cfg_path = getOpt(rest, "--config") orelse getOpt(rest, "-c") orelse return error.MissingArgument;
+        const output = getOpt(rest, "--output") orelse getOpt(rest, "-o") orelse return error.MissingArgument;
+        const text = partlist.generate(aa, io, cfg_path) catch |err| {
+            try out.print("partlist 失败：{s}\n", .{@errorName(err)});
+            return err;
+        };
+        defer aa.free(text);
+        try ensureParentDir(io, output);
+        try writeText(io, output, text);
+        var lines: usize = 0;
+        var it = std.mem.splitScalar(u8, text, '\n');
+        while (it.next()) |line| {
+            if (line.len > 0) lines += 1;
+        }
+        try out.print("partlist: {d} 项 -> {s}\n", .{ lines, output });
         return;
     }
 

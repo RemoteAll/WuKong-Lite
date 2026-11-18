@@ -6,7 +6,7 @@
 //!   * `<base>.dironly.csv`：同上，只保留目录
 const std = @import("std");
 
-pub const Error = error{NoMemoryMap, BadSection};
+pub const Error = error{ NoMemoryMap, BadSection };
 
 const FileInfo = struct {
     size: u64 = 0,
