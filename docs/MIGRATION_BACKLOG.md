@@ -10,7 +10,7 @@
 |----|------|------|----------|------|
 | P0-1 | bootloader/PBP 资源打包（`mk_prebootprog.py`、`mk_private_resource.py`、`spienc`） | 🟡 | PBP/私有资源均与参考逐字节一致 | `mk_prebootprog`、`mk_private_resource` 已完成；spienc 保留官方 |
 | P0-2 | RTOS 内核（rt-thread/freertos/ucos-ii）与 HAL 驱动 | ⏸ | 官方 SDK | 同上；本仓库只做 OSAL/设备框架模拟 |
-| P0-3 | 主机烧写协议（upgcmd 源码 / UART USB 客户端） | ⬜ | 开源设备端 `lib/aicupg` | 主机源码未公开；可先实现 UART 协议子集，`upgcmd -e` 作为对照 |
+| P0-3 | 主机烧写协议（upgcmd 源码 / UART USB 客户端） | 🟡 | 帧编码/解码与参考 `aicupg_client.py` **逐字节一致**（2026-11-18） | 主机源码未公开；已按开源设备端 `lib/aicupg` 与 `docs/official/skills/aiburn` 的 Python 客户端实现**帧层**（`AA55/ver/cmd/len/CRC16-CCITT/55AA`，`wk upg frame|decode`）；烧写流程（burn/upload/串口或 TCP 传输）待做；`upgcmd -e` 可作对照 |
 | P0-4 | 上游文档同步机制 | ✅ | `tools/sync-upstream.ps1 -Check` 退出 0 | 2026-11-17 建立，10 个文件 + `UPSTREAM.json` |
 
 ## P1 · 镜像与安全

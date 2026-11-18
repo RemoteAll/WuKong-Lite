@@ -32,6 +32,7 @@ const littlefs = aic.littlefs;
 const fsinstall = aic.fsinstall;
 const sdk_update = aic.sdk_update;
 const rtt2freertos = aic.rtt2freertos;
+const upg_frame = aic.upg_frame;
 const panic = aic.panic;
 const preboot = aic.preboot;
 const privres = aic.privres;
@@ -133,6 +134,8 @@ fn dispatch(io: std.Io, aa: std.mem.Allocator, argv: []const []const u8, out: *s
         try cmdSdkUpdate(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "rtt2freertos")) {
         try cmdRtt2Freertos(io, aa, rest, out);
+    } else if (std.mem.eql(u8, cmd, "upg")) {
+        try cmdUpg(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "panic")) {
         try cmdPanic(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "shell")) {
@@ -368,6 +371,73 @@ fn cmdRtt2Freertos(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, 
     try out.print("\nnext steps:\n  scons --apply-def={s}_defconfig && scons -j8\n", .{result.plan_name});
 }
 
+/// `wk upg frame --cmd <n> [--payload <text>|--payload-file <f>] [-o out.bin]`
+/// `wk upg decode -i <frame.bin>` —— upgcmd 帧协议编解码（P0-3 底座）。
+fn cmdUpg(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std.Io.Writer) !void {
+    if (args.len == 0) {
+        try out.writeAll("usage: wk upg frame --cmd <n> [--payload <text>|--payload-file <f>] [-o out.bin]\n" ++
+            "       wk upg decode -i <frame.bin>\n");
+        return error.MissingArgument;
+    }
+    const sub = args[0];
+    const rest = args[1..];
+
+    if (std.mem.eql(u8, sub, "frame")) {
+        const cmd_text = getOpt(rest, "--cmd") orelse getOpt(rest, "-c") orelse return error.MissingArgument;
+        const cmd = std.fmt.parseInt(u8, cmd_text, 0) catch return error.InvalidArgument;
+        const payload: []const u8 = if (getOpt(rest, "--payload-file")) |p|
+            try readBytes(io, aa, p)
+        else
+            getOpt(rest, "--payload") orelse getOpt(rest, "-p") orelse "";
+        defer if (getOpt(rest, "--payload-file") != null) aa.free(payload);
+
+        const frame = try upg_frame.encode(aa, cmd, payload);
+        defer aa.free(frame);
+        if (getOpt(rest, "--output") orelse getOpt(rest, "-o")) |p| {
+            try writeBytes(io, p, frame);
+            try out.print("upg frame: {d} B -> {s}\n", .{ frame.len, p });
+        }
+        for (frame) |b| try out.print("{x:0>2}", .{b});
+        try out.writeAll("\n");
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "decode")) {
+        const path = getOpt(rest, "--input") orelse getOpt(rest, "-i") orelse return error.MissingArgument;
+        const data = try readBytes(io, aa, path);
+        defer aa.free(data);
+        const d = upg_frame.decode(data) catch |err| {
+            const text = switch (err) {
+                error.TooShort => upg_frame.decodeErrorText(error.TooShort),
+                error.BadMagic => upg_frame.decodeErrorText(error.BadMagic),
+                error.BadTail => upg_frame.decodeErrorText(error.BadTail),
+                error.BadVersion => upg_frame.decodeErrorText(error.BadVersion),
+                error.LengthMismatch => upg_frame.decodeErrorText(error.LengthMismatch),
+                error.BadCrc => upg_frame.decodeErrorText(error.BadCrc),
+            };
+            try out.print("upg decode 失败：{s}（{s}）\n", .{ text, path });
+            return err;
+        };
+        try out.print("cmd      : 0x{x:0>2}\n", .{d.cmd});
+        try out.print("payload  : {d} B\n", .{d.payload.len});
+        try out.print("frame_len: {d} B\n", .{d.frame_len});
+        if (d.payload.len > 0) {
+            // 二进制 payload（固件分块等）只在合法 UTF-8 时按文本打印，否则打十六进制
+            if (std.unicode.utf8ValidateSlice(d.payload)) {
+                try out.print("payload: {s}\n", .{d.payload});
+            } else {
+                try out.writeAll("payload(hex): ");
+                for (d.payload) |b| try out.print("{x:0>2}", .{b});
+                try out.writeAll("\n");
+            }
+        }
+        return;
+    }
+
+    try out.print("upg: 未知子命令 {s}（可用 frame / decode）\n", .{sub});
+    return error.UnknownCommand;
+}
+
 fn cmdFs(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std.Io.Writer) !void {
     if (args.len == 0) return error.MissingArgument;
     const sub = args[0];
@@ -449,6 +519,8 @@ fn usage(out: *std.Io.Writer) !void {
         \\  sdk-update --root <SDK 根目录>     修复 target/**/*pinmux.c（等价 sdk_update.py）
         \\  rtt2freertos <defconfig> [-o <out>] [--dry-run] [--sysname aic]
         \\                                    rt-thread 方案 → freertos 方案（等价 rtt2freertos.py）
+        \\  upg frame --cmd <n> [--payload <text>|--payload-file <f>] [-o out.bin]
+        \\  upg decode -i <frame.bin>        upgcmd 帧协议编解码（AA55/CRC16-CCITT/55AA）
         \\  panic -l <panic.log> [-e <elf>] [-c riscv|csky] [--addr2line <tool>]
         \\  shell [-c "cmd"]            交互式 msh（uart0 / gpio0 模拟设备）
         \\  run hello                   HelloWorld 示例

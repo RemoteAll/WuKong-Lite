@@ -10,3 +10,4 @@ wk/config/build_plan.json
 wk/image/*
 !wk/image/.gitkeep
 !wk/config/.gitkeep
+__pycache__/

@@ -46,6 +46,7 @@
 | `sdk_update.py` | `src/tools/sdk_update.zig`、`wk sdk-update` | 同一 pinmux.c 样本，忽略行尾后与参考脚本输出逐行一致；已修复文件幂等（2026-11-18） |
 | `panic_parse.py` | `src/tools/panic.zig`、`wk panic` | 同一 panic 日志 + `d13x.elf`，与参考脚本输出**逐行一致**（寄存器/栈回溯/地址定位；2026-11-18） |
 | `rtt2freertos.py` | `src/tools/rtt2freertos.zig`、`wk rtt2freertos` | 28 个官方 `*_rt-thread_*_defconfig` 全部转换，与参考脚本输出**逐字节一致**（忽略 Windows CRLF；2026-11-18） |
+| `aicupg_client.py`（帧层） | `src/tools/upg_frame.zig`、`wk upg frame|decode` | 7 组命令/payload 编码与参考客户端**逐字节一致**；4 组 CRC、5 类损坏帧拒绝行为一致（2026-11-18） |
 | `openssl`（AES/RSA 子集） | `crypt.zig`、`rsa.zig` | AES 双向逐字节；RSA 与 openssl 互通 |
 | `upgcmd`（使用侧） | `tools/fetch-upgcmd-deps.ps1`、`flash-*.ps1` | `-e` 解析本仓库 AIC.FW |
 | Kconfig/defconfig/codegen | `kconfig.zig`、`codegen.zig`、`modules.zig` | 单测覆盖 |

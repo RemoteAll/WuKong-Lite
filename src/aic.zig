@@ -38,6 +38,7 @@ pub const littlefs = @import("tools/littlefs.zig");
 pub const fsinstall = @import("tools/fsinstall.zig");
 pub const sdk_update = @import("tools/sdk_update.zig");
 pub const rtt2freertos = @import("tools/rtt2freertos.zig");
+pub const upg_frame = @import("tools/upg_frame.zig");
 pub const panic = @import("tools/panic.zig");
 pub const des = @import("tools/des.zig");
 pub const rsa_key = @import("tools/rsa_key.zig");
