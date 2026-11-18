@@ -27,6 +27,7 @@ const ota = aic.ota;
 const linkaddr = aic.linkaddr;
 const linksize = aic.linksize;
 const partlist = aic.partlist;
+const partcheck = aic.partcheck;
 const flashpack = aic.flashpack;
 const fw_image = aic.fw_image;
 const image = aic.image;
@@ -152,6 +153,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image linkaddr --config <.config> --input <image_cfg.json> [--output <json>]
         \\  image linksize --map <file.map> [--out-dir <dir>]
         \\  image partlist --config <image_cfg.json> --output <partition_file_list.h>
+        \\  image partcheck -c <image_cfg.json> -d <packed-dir> [-t 90] [--strict]
         \\  image flashpack [--config <image_cfg.json>] [--payload-dir <dir>] [--out-dir <dir>]
         \\  image dump <file>
         \\
@@ -1105,6 +1107,25 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
             if (line.len > 0) lines += 1;
         }
         try out.print("partlist: {d} 项 -> {s}\n", .{ lines, output });
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "partcheck")) {
+        const cfg_path = getOpt(rest, "--config") orelse getOpt(rest, "-c") orelse return error.MissingArgument;
+        const dir_path = getOpt(rest, "--dir") orelse getOpt(rest, "-d") orelse return error.MissingArgument;
+        const threshold: f64 = if (getOpt(rest, "--threshold")) |v|
+            (std.fmt.parseFloat(f64, v) catch return error.InvalidArgument)
+        else if (getOpt(rest, "-t")) |v|
+            (std.fmt.parseFloat(f64, v) catch return error.InvalidArgument)
+        else
+            90;
+        var result = partcheck.run(aa, io, cfg_path, dir_path, threshold) catch |err| {
+            try out.print("partcheck 失败：{s}\n", .{@errorName(err)});
+            return err;
+        };
+        defer partcheck.deinitResult(aa, &result);
+        try out.writeAll(result.text);
+        if (hasFlag(rest, "--strict") and result.overflow > 0) return partcheck.Error.PartitionOverflow;
         return;
     }
 

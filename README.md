@@ -73,6 +73,8 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
   `.dironly.csv`（对应 `linked_size.py`）。
 - **分区文件清单**：`wk image partlist` 读取 `image_cfg.json`，生成
   `<partition>,<file>,<partition_size>` 清单（对应 `gen_partition_file_list.py`）。
+- **分区占用检查**：`wk image partcheck -c <cfg> -d <dir>` 输出占用表（对应
+  `partition_check.py`）；`.jffs2` 按擦除块内容计算、UBI 卷优先取卷大小，`--strict` 时溢出返回非零。
 - **烧写包准备**：`wk image flashpack` 读取 image_cfg 与 payload 目录，校验 AIC/FIT、
   自动补 `env.bin`/`rodata.fatfs`、按分区大小检查，输出 AIC.FW + `manifest.txt` + `FLASH.md`
   + `flash-upgcmd.ps1` / `flash-aiburn.ps1`。
@@ -142,6 +144,7 @@ zig-out\bin\wk.exe image merge --output merged.bin --input a.bin --input b.bin
 zig-out\bin\wk.exe image linkaddr --config .config --input pack/image_cfg.json --output pack/image_cfg.json
 zig-out\bin\wk.exe image linksize --map apps/hello_uart.map
 zig-out\bin\wk.exe image partlist --config pack/image_cfg.json --output pack/partition_file_list.h
+zig-out\bin\wk.exe image partcheck -c pack/image_cfg.json -d pack --strict
 zig-out\bin\wk.exe image flashpack --payload-dir payload --out-dir flash
 powershell -File tools\fetch-upgcmd-deps.ps1 -SdkRoot <luban-lite>
 powershell -File flash\flash-upgcmd.ps1 -Monitor COM5
