@@ -2,6 +2,7 @@
 zig-out/
 artifacts/
 build/
+libapp.a
 wk/config/.config
 wk/config/cconfig.h
 wk/config/build_info.json

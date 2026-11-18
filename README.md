@@ -95,6 +95,9 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
 - **Zig 裸机应用**：`apps/hello_uart/` + `tools/build-zig-app.ps1`，
   一键产出 `.o/.elf/.aic/.bin`（entry 0x41000000，UART0 轮询输出），
   可用 `upgcmd write/exec` 直接跑到 RAM。
+- **设备侧 Zig SDK**：`device/` + `tools/build-zig-sdk.ps1`，编译成 `libwksdk.a`
+  链接进官方 C SDK 固件（保留 bootloader/RT-Thread/HAL/LVGL）；
+  `tools/attach-zig-sdk.ps1` 注入 SCons 构建，详见 `docs/ZIG_SDK.md`。
 - **ELF 工具**：`wk image elf2aic`（按 PT_LOAD 展开为 AIC 可启动镜像）、
   `wk image elf2its`（按参考 `elf2image` 规则提取 `segN.bin` 并生成 ITS，XIP 段序交换）。
 
@@ -155,6 +158,7 @@ zig-out\bin\wk.exe image linksize --map apps/hello_uart.map
 zig-out\bin\wk.exe image partlist --config pack/image_cfg.json --output pack/partition_file_list.h
 zig-out\bin\wk.exe image partcheck -c pack/image_cfg.json -d pack --strict
 zig-out\bin\wk.exe image littlefs -i payload/data -o pack/data.lfs -b 4096 -p 256
+powershell -ExecutionPolicy Bypass -File tools\build-zig-sdk.ps1
 zig-out\bin\wk.exe fs install -s payload/data -d output/rootfs -o output
 zig-out\bin\wk.exe image pbp -i bootloader.bin -o bootloader.pbp -k pnk.bin
 zig-out\bin\wk.exe image privres -c pack/pbp_cfg.json -o pack/pbp_cfg.bin

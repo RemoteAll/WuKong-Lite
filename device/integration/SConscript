@@ -1,0 +1,13 @@
+import os
+from building import *
+
+import building
+
+repo = os.environ.get('WK_REPO', '')
+lib = os.path.join(repo, 'wk', 'image', 'apps', 'libwksdk.a')
+if repo and os.path.exists(lib):
+    building.Env.Append(LIBS=[building.Env.File(lib)])
+    print('Zig SDK: ' + lib)
+
+group = []
+Return('group')

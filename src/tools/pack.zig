@@ -119,6 +119,28 @@ fn buildNandOrg(allocator: std.mem.Allocator, media: std.json.ObjectMap) ![]u8 {
     return out.toOwnedSlice();
 }
 
+/// 逐字节对比两段固件包，返回差异数量与首个差异偏移。
+pub const CompareResult = struct {
+    ref_len: usize,
+    zig_len: usize,
+    diff: usize,
+    first: ?usize,
+};
+
+pub fn compareBytes(ref: []const u8, zig: []const u8) CompareResult {
+    const n = @min(ref.len, zig.len);
+    var diff: usize = 0;
+    var first: ?usize = null;
+    for (ref[0..n], zig[0..n], 0..) |a, b, i| {
+        if (a != b) {
+            diff += 1;
+            if (first == null) first = i;
+        }
+    }
+    if (ref.len != zig.len) diff += if (ref.len > zig.len) ref.len - zig.len else zig.len - ref.len;
+    return .{ .ref_len = ref.len, .zig_len = zig.len, .diff = diff, .first = first };
+}
+
 /// 读取 image_cfg.json 与数据目录，生成 AIC.FW 固件包。
 pub fn buildFirmware(
     allocator: std.mem.Allocator,
@@ -387,4 +409,19 @@ test "packFromComponents 生成的组件顺序与元数据" {
     try std.testing.expectEqualStrings("spi-nor", metas[2].devNameStr());
     try std.testing.expectEqual(@as(u32, 0x30044000), metas[0].ram);
     try std.testing.expectEqualStrings("BOOTLOADER", fw[metas[2].offset_in_img..][0..10]);
+}
+
+test "compareBytes：逐字节差异统计" {
+    const a = [_]u8{ 1, 2, 3, 4, 5 };
+    const b = [_]u8{ 1, 9, 3, 8, 5 };
+    const r = compareBytes(&a, &b);
+    try std.testing.expectEqual(@as(usize, 5), r.ref_len);
+    try std.testing.expectEqual(@as(usize, 5), r.zig_len);
+    try std.testing.expectEqual(@as(usize, 2), r.diff);
+    try std.testing.expectEqual(@as(?usize, 1), r.first);
+
+    const c = [_]u8{ 1, 2, 3 };
+    const r2 = compareBytes(&a, &c);
+    try std.testing.expectEqual(@as(usize, 2), r2.diff);
+    try std.testing.expectEqual(@as(?usize, null), r2.first);
 }

@@ -173,7 +173,8 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image aic  --input <bin> [--load 0x...] [--entry 0x...] [-o out.aic]
         \\  image elf2aic --input <elf> [--head-ver 0x...] [-o out.aic]
         \\  image elf2its --input <elf> [--version 1.0.0] [--hash crc32,md5|--no-hash] [-o out_os.its]
-        \\  image pack --config <json> [--datadir <dir>] [-o out.img]
+        \\  image pack --config <json> [--datadir <dir>] [-o out.img] [--compare <ref.img>]
+        \\            或 --sdk-output <C-SDK-images-dir>（自动取其中的 image_cfg.json 与组件）
         \\  image itb --kernel <bin> [--fdt <dtb>] [--ramdisk <bin>] [--load 0x...] [--entry 0x...] [-o out.itb]
         \\            或 --its <xxx.its> [--timestamp <u32>] [-o out.itb]
         \\  image pagetable --input <spl.bin> [--page 2] [--block 128] [--planes 1] [-o page.bin]
@@ -646,8 +647,14 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
     }
 
     if (std.mem.eql(u8, sub, "pack")) {
-        const cfg_path = getOpt(rest, "--config") orelse return error.MissingArgument;
-        const datadir = getOpt(rest, "--datadir") orelse (std.fs.path.dirname(cfg_path) orelse ".");
+        var cfg_owned: ?[]u8 = null;
+        defer if (cfg_owned) |p| aa.free(p);
+        const sdk_output = getOpt(rest, "--sdk-output");
+        const cfg_path = if (sdk_output) |dir| blk: {
+            cfg_owned = try std.fs.path.join(aa, &.{ dir, "image_cfg.json" });
+            break :blk cfg_owned.?;
+        } else getOpt(rest, "--config") orelse return error.MissingArgument;
+        const datadir = sdk_output orelse getOpt(rest, "--datadir") orelse (std.fs.path.dirname(cfg_path) orelse ".");
         const bytes = try pack.buildFirmware(aa, io, cfg_path, datadir);
         defer aa.free(bytes);
 
@@ -664,6 +671,19 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         try writeBytes(io, out_path, bytes);
         try out.print("固件包: {s} ({d} bytes)\n", .{ out_path, bytes.len });
         try fw_image.dump(out, bytes);
+
+        if (getOpt(rest, "--compare")) |ref_path| {
+            const ref = try readBytes(io, aa, ref_path);
+            defer aa.free(ref);
+            const cmp = pack.compareBytes(ref, bytes);
+            try out.print(
+                "对比: 参考 {d} B / Zig {d} B，DIFF={d}",
+                .{ cmp.ref_len, cmp.zig_len, cmp.diff },
+            );
+            if (cmp.first) |off| try out.print("，首个差异 @0x{X}", .{off});
+            try out.writeByte('\n');
+            if (cmp.diff != 0) return error.FirmwareMismatch;
+        }
         return;
     }
 
