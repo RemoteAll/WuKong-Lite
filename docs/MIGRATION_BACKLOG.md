@@ -34,7 +34,7 @@
 | P2-2 | `calc_linked_addr.py` | ✅ | `wk image linkaddr`：MEM_AUTO/显式 TEXT_BASE + 4 占位符替换；实测 text=0x400ef000/load=0x400eef00 | 2026-11-17 完成 |
 | P2-3 | `linked_size.py` | ✅ | `wk image linksize` 生成 summary/detail/dironly；hello_uart.map 与参考 summary 完全一致（382=187+84+111） | 2026-11-17 完成 |
 | P2-4 | `gen_partition_file_list.py` / `partition_check.py` | ✅ | `partlist` 与参考 D13x 输出一致；`partcheck` 在 50%/125% 样本上与参考表格、`--strict` 退出码一致 | 2026-11-18 完成 |
-| P2-5 | `fsinstall.py` / `config_update.py` / `rtt2freertos.py` / `sdk_update.py` / `release_patch.py` / `panic_parse.py` / `build_mini_bootloader.py` | ⬜ | 逐脚本对照 | 按实际使用频率排序 |
+| P2-5 | `fsinstall.py` / `config_update.py` / `rtt2freertos.py` / `sdk_update.py` / `release_patch.py` / `panic_parse.py` / `build_mini_bootloader.py` | 🟡 | `wk fs install/clean` 实测递归安装/清理与内容哈希一致 | fsinstall 完成（并修正参考脚本相对路径写到盘符根的缺陷）；其余待做 |
 | P2-6 | 官方文档 `topics/` 464 篇 + images/webhelp | ⬜ | 目录/链接完整性 | 体积大，建议按需生成离线包，不全量入库 |
 
 ## P3 · 生态与二进制

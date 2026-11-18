@@ -29,6 +29,7 @@ const linksize = aic.linksize;
 const partlist = aic.partlist;
 const partcheck = aic.partcheck;
 const littlefs = aic.littlefs;
+const fsinstall = aic.fsinstall;
 const flashpack = aic.flashpack;
 const fw_image = aic.fw_image;
 const image = aic.image;
@@ -106,6 +107,8 @@ fn dispatch(io: std.Io, aa: std.mem.Allocator, argv: []const []const u8, out: *s
         try cmdBuild(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "image")) {
         try cmdImage(io, aa, rest, out);
+    } else if (std.mem.eql(u8, cmd, "fs")) {
+        try cmdFs(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "shell")) {
         try cmdShell(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "run")) {
@@ -117,6 +120,38 @@ fn dispatch(io: std.Io, aa: std.mem.Allocator, argv: []const []const u8, out: *s
         try usage(out);
         return error.UnknownCommand;
     }
+}
+
+fn cmdFs(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std.Io.Writer) !void {
+    if (args.len == 0) return error.MissingArgument;
+    const sub = args[0];
+    const rest = args[1..];
+
+    if (std.mem.eql(u8, sub, "install")) {
+        const src = getOpt(rest, "--src") orelse getOpt(rest, "-s") orelse return error.MissingArgument;
+        const dst = getOpt(rest, "--dst") orelse getOpt(rest, "-d") orelse return error.MissingArgument;
+        const sdkout = getOpt(rest, "--sdkout") orelse getOpt(rest, "-o");
+        fsinstall.install(aa, io, src, dst, sdkout) catch |err| {
+            try out.print("fs install 失败：{s}（src={s} dst={s}）\n", .{ @errorName(err), src, dst });
+            return err;
+        };
+        try out.print("fs install: {s} -> {s}\n", .{ src, dst });
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "clean")) {
+        const list = getOpt(rest, "--clean") orelse getOpt(rest, "-c") orelse return error.MissingArgument;
+        const sdkout = getOpt(rest, "--sdkout") orelse getOpt(rest, "-o");
+        fsinstall.clean(aa, io, list, sdkout) catch |err| {
+            try out.print("fs clean 失败：{s}（list={s}）\n", .{ @errorName(err), list });
+            return err;
+        };
+        try out.print("fs clean: {s}\n", .{list});
+        return;
+    }
+
+    try out.print("fs: 未知子命令 {s}（可用 install / clean）\n", .{sub});
+    return error.UnknownCommand;
 }
 
 fn usage(out: *std.Io.Writer) !void {
@@ -159,6 +194,8 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image flashpack [--config <image_cfg.json>] [--payload-dir <dir>] [--out-dir <dir>]
         \\  image dump <file>
         \\
+        \\  fs install -s <src> -d <dst> [-o <sdkout>]
+        \\  fs clean -c <path1,path2> [-o <sdkout>]
         \\  shell [-c "cmd"]            交互式 msh（uart0 / gpio0 模拟设备）
         \\  run hello                   HelloWorld 示例
         \\  demo                        端到端演示（配置 → 打包 → 解析）

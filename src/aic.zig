@@ -35,6 +35,7 @@ pub const linksize = @import("tools/linksize.zig");
 pub const partlist = @import("tools/partlist.zig");
 pub const partcheck = @import("tools/partcheck.zig");
 pub const littlefs = @import("tools/littlefs.zig");
+pub const fsinstall = @import("tools/fsinstall.zig");
 pub const flashpack = @import("tools/flashpack.zig");
 pub const partition_table = @import("tools/partition_table.zig");
 pub const pack = @import("tools/pack.zig");

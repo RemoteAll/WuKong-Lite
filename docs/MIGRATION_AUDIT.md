@@ -39,6 +39,7 @@
 | `gen_partition_file_list.py` | `src/tools/partlist.zig`、`wk image partlist` | D13x 配置输出 6 项与参考完全一致（2026-11-18） |
 | `partition_check.py` | `src/tools/partcheck.zig`、`wk image partcheck` | 50%/125% 样本表格与 `--strict` 退出码同参考；jffs2/UBI 规则已覆盖（2026-11-18） |
 | `makelittlefs.py` | `src/tools/littlefs.zig`、`wk image littlefs` | 复用上游 littlefs 2.5；`mklittlefs -l/-u` 验证多文件/嵌套内容一致（2026-11-18） |
+| `fsinstall.py` | `src/tools/fsinstall.zig`、`wk fs install/clean` | 递归安装/单文件安装/清理；内容 SHA256 一致（2026-11-18） |
 | `openssl`（AES/RSA 子集） | `crypt.zig`、`rsa.zig` | AES 双向逐字节；RSA 与 openssl 互通 |
 | `upgcmd`（使用侧） | `tools/fetch-upgcmd-deps.ps1`、`flash-*.ps1` | `-e` 解析本仓库 AIC.FW |
 | Kconfig/defconfig/codegen | `kconfig.zig`、`codegen.zig`、`modules.zig` | 单测覆盖 |
@@ -67,8 +68,7 @@
 - 固件加密：`firmware_security_encrypt`（含 nonce/tweak 的 AES-XTS 类流程）、
   `encrypt_rsa_key.py`、SPIENC/eFuse 安全启动；
 - `mkimage` 的 RSA/SM2 签名节点、公钥内嵌、`-K` 更新 dtb；
-- 镜像辅助脚本：`fsinstall.py`、
-  `config_update.py`、`rtt2freertos.py`、`sdk_update.py`、`release_patch.py`、
+- 镜像辅助脚本：`config_update.py`、`rtt2freertos.py`、`sdk_update.py`、`release_patch.py`、
   `panic_parse.py`、`build_mini_bootloader.py`。
 
 ### P2：中间件/生态
