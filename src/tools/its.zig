@@ -1,4 +1,4 @@
-﻿//! ITS（FIT Image Tree Source）解析器 —— 对应 Luban-Lite 构建流程里
+//! ITS（FIT Image Tree Source）解析器 —— 对应 Luban-Lite 构建流程里
 //! `mkimage -f xxx.its xxx.itb` 这一步。
 //!
 //! 支持 DTS 子集：
@@ -48,7 +48,122 @@ pub const Parsed = struct {
         const root = try toFdtNode(self.arena.allocator(), self.root);
         return fdt.build(allocator, root);
     }
+
+    /// 生成 FIT blob，并把各 image 的 `data` 挪到 FIT 之外（等价 mkimage `-E -B <align>`）。
+    ///
+    /// 逐条对应参考 `itbimage/_core.py::_extract_external_data()`：
+    ///   1. 去掉 `data`，加占位 `data-offset/data-size/data-position` → 先序列化量尺寸；
+    ///   2. `aligned_boundary = align_up(dtb_size, align)`；
+    ///   3. 每个 image 依次按 `align` 对齐后放进外部数据区；
+    ///   4. 回填真实 offset/size/position（`data-position` 是**绝对**偏移）；
+    ///   5. 重新序列化并补齐到 `aligned_boundary`，末尾接外部数据区（补齐到 `align`）。
+    pub fn buildFdtExternal(
+        self: *Parsed,
+        allocator: std.mem.Allocator,
+        timestamp: u32,
+        align_to: usize,
+    ) ![]u8 {
+        _ = try ensureTimestamp(self, timestamp);
+        const a = self.arena.allocator();
+        const block_align = if (align_to == 0) 4 else align_to;
+
+        const images = findChild(self.root, "images") orelse {
+            const root = try toFdtNode(a, self.root);
+            return fdt.build(allocator, root);
+        };
+
+        // 1) 收集 data 并换成占位属性
+        const Img = struct { node: *Node, data: []const u8 };
+        var entries: std.ArrayList(Img) = .empty;
+        defer entries.deinit(a);
+        for (images.children.items) |img| {
+            const p = img.getProp("data") orelse continue;
+            const data = p.data;
+            if (data.len == 0) continue;
+            try removeProp(img, a, "data");
+            try setU32Prop(img, a, "data-offset", 0);
+            try setU32Prop(img, a, "data-size", @intCast(data.len));
+            try setU32Prop(img, a, "data-position", 0);
+            try entries.append(a, .{ .node = img, .data = data });
+        }
+        if (entries.items.len == 0) {
+            const root = try toFdtNode(a, self.root);
+            return fdt.build(allocator, root);
+        }
+
+        // 2) 先序列化量尺寸
+        var temp_root = try toFdtNode(a, self.root);
+        const temp = try fdt.build(allocator, temp_root);
+        const temp_size = temp.len;
+        allocator.free(temp);
+        const aligned_boundary = alignForward(temp_size, block_align);
+
+        // 3) 外部数据区
+        var ext: std.ArrayList(u8) = .empty;
+        defer ext.deinit(allocator);
+        var offsets: std.ArrayList(usize) = .empty;
+        defer offsets.deinit(allocator);
+        for (entries.items) |e| {
+            const off = alignForward(ext.items.len, block_align);
+            try ext.appendNTimes(allocator, 0, off - ext.items.len);
+            try offsets.append(allocator, off);
+            try ext.appendSlice(allocator, e.data);
+        }
+        const final_len = alignForward(ext.items.len, block_align);
+        try ext.appendNTimes(allocator, 0, final_len - ext.items.len);
+
+        // 4) 回填真实值
+        for (entries.items, offsets.items) |e, off| {
+            try setU32Prop(e.node, a, "data-offset", @intCast(off));
+            try setU32Prop(e.node, a, "data-size", @intCast(e.data.len));
+            try setU32Prop(e.node, a, "data-position", @intCast(aligned_boundary + off));
+        }
+
+        // 5) 最终序列化 + 补齐
+        temp_root = try toFdtNode(a, self.root);
+        const dtb = try fdt.build(allocator, temp_root);
+        defer allocator.free(dtb);
+        const out = try allocator.alloc(u8, aligned_boundary + final_len);
+        @memset(out, 0);
+        @memcpy(out[0..dtb.len], dtb);
+        @memcpy(out[aligned_boundary..][0..final_len], ext.items);
+        return out;
+    }
 };
+
+fn alignForward(x: usize, y: usize) usize {
+    return ((x + y - 1) / y) * y;
+}
+
+fn findChild(node: *const Node, name: []const u8) ?*Node {
+    for (node.children.items) |c| {
+        if (std.mem.eql(u8, c.name, name)) return c;
+    }
+    return null;
+}
+
+fn removeProp(node: *Node, allocator: std.mem.Allocator, name: []const u8) !void {
+    var i: usize = 0;
+    while (i < node.props.items.len) : (i += 1) {
+        if (std.mem.eql(u8, node.props.items[i].name, name)) {
+            _ = node.props.orderedRemove(i);
+            _ = allocator;
+            return;
+        }
+    }
+}
+
+fn setU32Prop(node: *Node, allocator: std.mem.Allocator, name: []const u8, value: u32) !void {
+    const bytes = try allocator.alloc(u8, 4);
+    std.mem.writeInt(u32, bytes[0..4], value, .big);
+    for (node.props.items) |*p| {
+        if (std.mem.eql(u8, p.name, name)) {
+            p.data = bytes;
+            return;
+        }
+    }
+    try node.props.append(allocator, .{ .name = name, .data = bytes });
+}
 
 // ----------------------------------------------------------------------
 // 词法
@@ -639,4 +754,60 @@ test "ITS 签名/加密节点明确拒绝" {
         \\
     ;
     try std.testing.expectError(error.SigningOrEncryptionNotSupported, parseText(allocator, io, text, "."));
+}
+
+test "ITS 外部数据：data 挪出 FIT，写 data-offset/data-size/data-position" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const dir = ".zig-cache/its-ext-test";
+    std.Io.Dir.cwd().createDirPath(io, dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+
+    const payload = [_]u8{ 0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33 };
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dir ++ "/k.bin", .data = &payload });
+
+    const text =
+        \\/dts-v1/;
+        \\
+        \\/ {
+        \\    description = "ext";
+        \\    images {
+        \\        kernel-1 {
+        \\            data = /incbin/("k.bin");
+        \\            type = "kernel";
+        \\        };
+        \\    };
+        \\    configurations {
+        \\        default = "conf-1";
+        \\        conf-1 {
+        \\            kernel = "kernel-1";
+        \\        };
+        \\    };
+        \\};
+        \\
+    ;
+    var parsed = try parseText(allocator, io, text, dir);
+    defer parsed.deinit();
+
+    const blob = try parsed.buildFdtExternal(allocator, 0x11223344, 0x800);
+    defer allocator.free(blob);
+
+    var tree = try @import("fdt_reader.zig").parse(allocator, blob);
+    defer tree.deinit();
+
+    const images = @import("fdt_reader.zig").findChild(tree.root, "images") orelse return error.NoImages;
+    const kernel = @import("fdt_reader.zig").findChild(images, "kernel-1") orelse return error.NoKernel;
+
+    // data 已挪走
+    try std.testing.expect(@import("fdt_reader.zig").findProp(kernel, "data") == null);
+    const size = @import("fdt_reader.zig").getBe32(kernel, "data-size") orelse return error.NoSize;
+    const off = @import("fdt_reader.zig").getBe32(kernel, "data-offset") orelse return error.NoOffset;
+    const pos = @import("fdt_reader.zig").getBe32(kernel, "data-position") orelse return error.NoPosition;
+    try std.testing.expectEqual(@as(u32, payload.len), size);
+    try std.testing.expectEqual(@as(u32, 0), off);
+    // data-position 是绝对偏移，且落在 0x800 边界之后
+    try std.testing.expectEqual(@as(u32, 0x800), pos);
+    // 外部数据按 align 补齐
+    try std.testing.expectEqual(@as(usize, 0x800 + 0x800), blob.len);
+    try std.testing.expectEqualSlices(u8, &payload, blob[pos..][0..payload.len]);
 }

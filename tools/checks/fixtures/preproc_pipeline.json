@@ -1,0 +1,61 @@
+{
+    "image": {
+        "info": {
+            "platform": "d13x",
+            "product": "preproc-check",
+            "version": "1.0.0",
+            "media": {
+                "type": "spi-nor",
+                "device_id": 0
+            }
+        }
+    },
+    "spi-nor": {
+        "size": "16m",
+        "partitions": {
+            "spl":   { "size": "512k" },
+            "env":   { "size": "128k" },
+            "env_r": { "size": "128k" },
+            "os":    { "size": "2m" },
+            "rodata": { "size": "12m" }
+        }
+    },
+    "pre-process": {
+        "aicprivate": {
+            "priv.bin": { "cfg": ["pbp_cfg.json"] }
+        },
+        "itb": {
+            "kernel.itb": { "its": "kernel.its" }
+        },
+        "uboot_env": {
+            "env.bin": { "file": "env.txt", "size": "4096", "redundant": "enable" }
+        },
+        "aicimage": {
+            "loader.aic": {
+                "head_ver": "0x00010001",
+                "loader": {
+                    "file": "bootloader.bin",
+                    "load address": "0x40100000",
+                    "entry point": "0x40100100"
+                },
+                "resource": {
+                    "private": "pbp_cfg.bin",
+                    "pubkey": "keys/rsa_public_key.der"
+                },
+                "encryption": {
+                    "algo": "aes-128-cbc",
+                    "key": "keys/aes-128-cbc-key.bin",
+                    "iv": "keys/aes-128-cbc-iv.bin"
+                },
+                "ssk_derived_key": "true",
+                "signature": {
+                    "algo": "rsa,2048",
+                    "privkey": "keys/rsa_private_key.der"
+                }
+            }
+        },
+        "concatenate": {
+            "bootloader.aic": ["loader.aic", "kernel.itb"]
+        }
+    }
+}

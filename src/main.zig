@@ -39,6 +39,7 @@ const panic = aic.panic;
 const preboot = aic.preboot;
 const privres = aic.privres;
 const aicboot = aic.aicboot;
+const preproc = aic.preproc;
 const rsa_key = aic.rsa_key;
 const flashpack = aic.flashpack;
 const fw_image = aic.fw_image;
@@ -666,6 +667,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image pbp -i <pbp.bin> -o <out.bin> [-m PBP2] [-k <pnk.bin>]
         \\  image privres -c <cfg.json> [-l <cfg2.json,cfg3.json>] [-o <out.bin>]
         \\  image aicimage -c <image_cfg.json> -d <datadir> [-k <keydir>]   (AIC 启动镜像 v2：签名/加密)
+        \\  image preproc -c <image_cfg.json> -d <datadir> [-k <keydir>] [--timestamp <u32>]   (整条 pre-process 流水线)
         \\  image rsakey -r <key.pem|der> [--aes-key <16B> | --des-key <8B>] [-o <outdir>]
         \\  image flashpack [--config <image_cfg.json>] [--payload-dir <dir>] [--out-dir <dir>]
         \\  image dump <file>
@@ -1738,6 +1740,30 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         }
         for (gens) |g| {
             try out.print("aicimage: {s} {d} B\n", .{ g.name, g.size });
+        }
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "preproc")) {
+        const cfg = getOpt(rest, "--config") orelse getOpt(rest, "-c") orelse return error.MissingArgument;
+        const datadir = getOpt(rest, "--datadir") orelse getOpt(rest, "-d") orelse return error.MissingArgument;
+        const keydir = getOpt(rest, "--keydir") orelse getOpt(rest, "-k");
+        const ts = parseOptionalU32(rest, "--timestamp") orelse currentTimestamp(io);
+        const steps = preproc.run(aa, io, .{
+            .cfg_path = cfg,
+            .datadir = datadir,
+            .keydir = keydir,
+            .timestamp = ts,
+        }) catch |err| {
+            try out.print("preproc 失败：{s}（config={s}，datadir={s}）\n", .{ @errorName(err), cfg, datadir });
+            return err;
+        };
+        defer {
+            for (steps) |s| aa.free(s.name);
+            aa.free(steps);
+        }
+        for (steps) |s| {
+            try out.print("preproc[{s}]: {s} {d} B\n", .{ s.proc, s.name, s.size });
         }
         return;
     }

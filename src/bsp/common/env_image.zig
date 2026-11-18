@@ -35,7 +35,11 @@ pub fn textToData(allocator: std.mem.Allocator, text: []const u8, prefix: []cons
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
 
-    if (prefix.len > 0) try out.appendSlice(allocator, prefix);
+    if (prefix.len > 0) {
+        // 参考的 mkenvimage 是把「前缀 + 环境变量文本」整份文件里的换行都换成 NUL，
+        // 所以前缀的换行也必须转成 NUL（否则 MTD=... 后面会残留一个 '\n'）。
+        for (prefix) |c| try out.append(allocator, if (c == '\n') 0 else c);
+    }
 
     var it = std.mem.splitScalar(u8, text, '\n');
     while (it.next()) |raw_line| {

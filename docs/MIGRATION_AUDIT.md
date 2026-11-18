@@ -58,7 +58,7 @@
 
 | 官方 | 已做 | 缺口 |
 |------|------|------|
-| `mkimage` 签名/加密 | `src/tools/aicboot.zig` + `wk image aicimage`：AIC 头 v2 的 `sign_algo`/`enc_algo`/iv 区间联动、RSA-2048 与 HMAC-SHA256 签名、AES-128-CBC（含 SSK 派生密钥）、MD5+校验和；6 组与 `mk_image.py -p` **逐字节一致**（2026-11-19） | ITS `signature*`/`cipher` 节点：本 SDK 的 `mkimage.exe` 实测打印 “Signing / verified boot not supported (CONFIG_FIT_SIGNATURE undefined)”，该路径在本 SDK 不存在 |
+| `mkimage` 签名/加密 | `src/tools/aicboot.zig` + `wk image aicimage`：AIC 头 v2 的 `sign_algo`/`enc_algo`/iv 区间联动、RSA-2048 与 HMAC-SHA256 签名、AES-128-CBC（含 SSK 派生密钥）、MD5+校验和；6 组与 `mk_image.py -p` **逐字节一致**（2026-11-19）。`itb` 外部数据（`-E`）+ 0x800 块对齐也已对齐（`its.buildFdtExternal`，结构对拍通过） | ITS `signature*`/`cipher` 节点：**由 SDK 的纯 Python `itbimage` 实现**（`_sign.py` RSA/SM2、`_cipher.py` AES-CBC/CTR/ChaCha20），`mkimage.exe` 本身不支持。我们的 `its.zig` 尚未实现这两类节点（当前直接报错） |
 | `aic_build.py` | Kconfig→build_plan→codegen | SCons 全量构建、链接脚本/工具链选择、镜像后处理流水线 |
 | 官方文档 | aiburn 技能 | `topics/` 464 篇、`images/`、`webhelp/` 未迁（体积原因，可按需） |
 | 板级方案 | 1 个 Kconfig 方案 | d12x/d21x/多板 `target` 与 `pack/image_cfg.json` |
@@ -79,7 +79,7 @@
   实测特征：只取密钥文件前 16 B（AES-128）、输入需 16 B 对齐且不填充、改动一块明文会影响其后所有块
   （前向链式）、已排除 ECB/CBC/CTR(XOR 流)；其余待上游公开后对齐。
   `encrypt_rsa_key.py` 已完成（见 ✅ 表）；SPIENC/eFuse 安全启动仍保留官方工具；
-- `mkimage` 的 RSA/SM2 签名节点、公钥内嵌、`-K` 更新 dtb；
+- `mkimage` 的 RSA/SM2 签名节点、公钥内嵌、`-K` 更新 dtb（参考实现是 SDK 自带的纯 Python `itbimage`）；
 - 镜像辅助脚本：`config_update.py`（交互式 menuconfig，无 TUI 需求）、`release_patch.py`、
   `build_mini_bootloader.py`。
   （`sdk_update.py` → `wk sdk-update`、`panic_parse.py` → `wk panic`、

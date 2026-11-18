@@ -54,3 +54,4 @@ test {
 }
 pub const upg_client = @import("tools/upg_client.zig");
 pub const aicboot = @import("tools/aicboot.zig");
+pub const preproc = @import("tools/preproc.zig");
