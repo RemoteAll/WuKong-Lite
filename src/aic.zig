@@ -38,6 +38,7 @@ pub const littlefs = @import("tools/littlefs.zig");
 pub const fsinstall = @import("tools/fsinstall.zig");
 pub const des = @import("tools/des.zig");
 pub const preboot = @import("tools/preboot.zig");
+pub const privres = @import("tools/privres.zig");
 pub const flashpack = @import("tools/flashpack.zig");
 pub const partition_table = @import("tools/partition_table.zig");
 pub const pack = @import("tools/pack.zig");

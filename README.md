@@ -82,6 +82,8 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
   递归删除（对应 `fsinstall.py`，支持 `-o <sdkout>` 前缀）。
 - **PBP 预启动程序**：`wk image pbp -i <pbp.bin> -o <out.bin> [-k <pnk.bin>]` 生成 PBP2 头、
   256 字节对齐与校验和；提供 PNK 时按参考算法派生 AES-128 并 ECB 加密（对应 `mk_prebootprog.py`）。
+- **私有资源**：`wk image privres -c <cfg.json> [-l <cfg2,cfg3>] [-o <out.bin>]` 生成
+  DRAM/PSRAM/UART/JTAG/分区/security 段二进制（对应 `mk_private_resource.py`）。
 - **烧写包准备**：`wk image flashpack` 读取 image_cfg 与 payload 目录，校验 AIC/FIT、
   自动补 `env.bin`/`rodata.fatfs`、按分区大小检查，输出 AIC.FW + `manifest.txt` + `FLASH.md`
   + `flash-upgcmd.ps1` / `flash-aiburn.ps1`。
@@ -155,6 +157,7 @@ zig-out\bin\wk.exe image partcheck -c pack/image_cfg.json -d pack --strict
 zig-out\bin\wk.exe image littlefs -i payload/data -o pack/data.lfs -b 4096 -p 256
 zig-out\bin\wk.exe fs install -s payload/data -d output/rootfs -o output
 zig-out\bin\wk.exe image pbp -i bootloader.bin -o bootloader.pbp -k pnk.bin
+zig-out\bin\wk.exe image privres -c pack/pbp_cfg.json -o pack/pbp_cfg.bin
 zig-out\bin\wk.exe image flashpack --payload-dir payload --out-dir flash
 powershell -File tools\fetch-upgcmd-deps.ps1 -SdkRoot <luban-lite>
 powershell -File flash\flash-upgcmd.ps1 -Monitor COM5

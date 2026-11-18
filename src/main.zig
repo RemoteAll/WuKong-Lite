@@ -31,6 +31,7 @@ const partcheck = aic.partcheck;
 const littlefs = aic.littlefs;
 const fsinstall = aic.fsinstall;
 const preboot = aic.preboot;
+const privres = aic.privres;
 const flashpack = aic.flashpack;
 const fw_image = aic.fw_image;
 const image = aic.image;
@@ -193,6 +194,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image partcheck -c <image_cfg.json> -d <packed-dir> [-t 90] [--strict]
         \\  image littlefs -i <dir> -o <image.lfs> -b <block> [-p <page>] [-s <size>] [-r <n>] [--all]
         \\  image pbp -i <pbp.bin> -o <out.bin> [-m PBP2] [-k <pnk.bin>]
+        \\  image privres -c <cfg.json> [-l <cfg2.json,cfg3.json>] [-o <out.bin>]
         \\  image flashpack [--config <image_cfg.json>] [--payload-dir <dir>] [--out-dir <dir>]
         \\  image dump <file>
         \\
@@ -1188,6 +1190,36 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
             "pbp: {s}（输入 {d} B，对齐后 {d} B，加密={s}）\n",
             .{ output, result.input_size, result.padded_size, if (result.encrypted) "是" else "否" },
         );
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "privres")) {
+        const cfg = getOpt(rest, "--config") orelse getOpt(rest, "-c") orelse return error.MissingArgument;
+        var paths: std.ArrayList([]const u8) = .empty;
+        defer paths.deinit(aa);
+        try paths.append(aa, cfg);
+        if (getOpt(rest, "--config-list") orelse getOpt(rest, "-l")) |list| {
+            var it = std.mem.splitScalar(u8, list, ',');
+            while (it.next()) |p| {
+                const trimmed = std.mem.trim(u8, p, " \t\r\n");
+                if (trimmed.len > 0) try paths.append(aa, trimmed);
+            }
+        }
+        const output = if (getOpt(rest, "--output") orelse getOpt(rest, "-o")) |p|
+            p
+        else blk: {
+            const dot = std.mem.lastIndexOfScalar(u8, paths.items[0], '.') orelse paths.items[0].len;
+            break :blk try std.fmt.allocPrint(aa, "{s}.bin", .{paths.items[0][0..dot]});
+        };
+        defer if ((getOpt(rest, "--output") orelse getOpt(rest, "-o")) == null) aa.free(output);
+
+        const data = privres.build(aa, io, paths.items) catch |err| {
+            try out.print("privres 失败：{s}（config={s}）\n", .{ @errorName(err), cfg });
+            return err;
+        };
+        defer aa.free(data);
+        try writeBytes(io, output, data);
+        try out.print("privres: {d} B -> {s}\n", .{ data.len, output });
         return;
     }
 
