@@ -195,17 +195,17 @@ const KEEP_PREFIX = [_][]const u8{
 };
 
 const REPORTED_PREFIXES = [_][]const u8{
-    "AIC_USING_", "AIC_I2S_",  "AIC_WLAN",   "AIC_BT",  "AIC_RTC_", "AIC_ENCODER",
-    "AIC_GYRO",   "AIC_GMAC",  "LPKG_",      "PKG_",    "AIC_LVGL",
+    "AIC_USING_", "AIC_I2S_", "AIC_WLAN", "AIC_BT", "AIC_RTC_", "AIC_ENCODER",
+    "AIC_GYRO",   "AIC_GMAC", "LPKG_",    "PKG_",   "AIC_LVGL",
 };
 
 const AIC_DRIVER_PATTERNS = [_][]const u8{
-    "AIC_USING_", "AIC_I2S",    "AIC_I2C",  "AIC_SPI",   "AIC_CAN",    "AIC_AUDIO",
-    "AIC_CODEC",  "AIC_CAMERA", "AIC_TOUCH", "AIC_CTP",  "AIC_TSEN",   "AIC_GPAI",
-    "AIC_CE",     "AIC_SID",    "AIC_MTOP", "AIC_RTP",   "AIC_HRTIMER", "AIC_ADCIM",
-    "AIC_VE",     "AIC_GE",     "AIC_DVP",  "AIC_DE",    "AIC_GMAC",   "AIC_WLAN",
-    "AIC_BT",     "AIC_ENCODER", "AIC_GYRO", "AIC_USB",  "AIC_MMC",    "AIC_PWM",
-    "AIC_KEYADC", "AIC_PSADC",  "AIC_DISP", "AIC_PAN",   "AIC_RING_BUFFER",
+    "AIC_USING_", "AIC_I2S",     "AIC_I2C",   "AIC_SPI", "AIC_CAN",         "AIC_AUDIO",
+    "AIC_CODEC",  "AIC_CAMERA",  "AIC_TOUCH", "AIC_CTP", "AIC_TSEN",        "AIC_GPAI",
+    "AIC_CE",     "AIC_SID",     "AIC_MTOP",  "AIC_RTP", "AIC_HRTIMER",     "AIC_ADCIM",
+    "AIC_VE",     "AIC_GE",      "AIC_DVP",   "AIC_DE",  "AIC_GMAC",        "AIC_WLAN",
+    "AIC_BT",     "AIC_ENCODER", "AIC_GYRO",  "AIC_USB", "AIC_MMC",         "AIC_PWM",
+    "AIC_KEYADC", "AIC_PSADC",   "AIC_DISP",  "AIC_PAN", "AIC_RING_BUFFER",
 };
 
 fn startsWithAny(s: []const u8, patterns: []const []const u8) bool {
