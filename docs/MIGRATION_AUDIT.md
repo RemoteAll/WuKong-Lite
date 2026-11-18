@@ -40,6 +40,7 @@
 | `partition_check.py` | `src/tools/partcheck.zig`、`wk image partcheck` | 50%/125% 样本表格与 `--strict` 退出码同参考；jffs2/UBI 规则已覆盖（2026-11-18） |
 | `makelittlefs.py` | `src/tools/littlefs.zig`、`wk image littlefs` | 复用上游 littlefs 2.5；`mklittlefs -l/-u` 验证多文件/嵌套内容一致（2026-11-18） |
 | `fsinstall.py` | `src/tools/fsinstall.zig`、`wk fs install/clean` | 递归安装/单文件安装/清理；内容 SHA256 一致（2026-11-18） |
+| `mk_prebootprog.py` | `src/tools/preboot.zig`、`src/tools/des.zig`、`wk image pbp` | PBP2 头/256 对齐/校验和；AES-ECB、DES 标准向量；加密路径实测（2026-11-18） |
 | `openssl`（AES/RSA 子集） | `crypt.zig`、`rsa.zig` | AES 双向逐字节；RSA 与 openssl 互通 |
 | `upgcmd`（使用侧） | `tools/fetch-upgcmd-deps.ps1`、`flash-*.ps1` | `-e` 解析本仓库 AIC.FW |
 | Kconfig/defconfig/codegen | `kconfig.zig`、`codegen.zig`、`modules.zig` | 单测覆盖 |
@@ -57,8 +58,8 @@
 ## 4. 未迁移（🔴）
 
 ### P0：影响“自己独立上板”
-- **bootloader/PBP**：`application/baremetal/bootloader`、`mk_prebootprog.py`、
-  `mk_private_resource.py`、`spienc/spienctool`、`d13x.pbp/pbp_cfg.bin` 资源打包；
+- **bootloader/PBP**：`application/baremetal/bootloader`、`mk_private_resource.py`、
+  `spienc/spienctool`、`d13x.pbp/pbp_cfg.bin` 资源打包；
 - **RTOS 内核**：`application/rt-thread`、`freertos`、`ucos-ii`；`kernel/` 适配；
 - **HAL/驱动**：41 类 `bsp/artinchip/drv`（显示/存储/网络/音频/USB/安全等）；
 - **烧写协议**：主机端 `upgcmd` 源码（内部 `aicupg`）、USB/UART 协议实现。

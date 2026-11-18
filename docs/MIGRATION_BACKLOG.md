@@ -8,7 +8,7 @@
 
 | ID | 项目 | 状态 | 验证基线 | 说明 |
 |----|------|------|----------|------|
-| P0-1 | bootloader/PBP 资源打包（`mk_prebootprog.py`、`mk_private_resource.py`、`spienc`） | ⏸ | 官方 SDK 产物 | 与官方 bootloader 强绑定，按用户口径保留官方实现 |
+| P0-1 | bootloader/PBP 资源打包（`mk_prebootprog.py`、`mk_private_resource.py`、`spienc`） | 🟡 | `wk image pbp` 头部/校验和/AES 加密路径实测 | `mk_prebootprog` 已完成；私有资源与 spienc 保留官方 |
 | P0-2 | RTOS 内核（rt-thread/freertos/ucos-ii）与 HAL 驱动 | ⏸ | 官方 SDK | 同上；本仓库只做 OSAL/设备框架模拟 |
 | P0-3 | 主机烧写协议（upgcmd 源码 / UART USB 客户端） | ⬜ | 开源设备端 `lib/aicupg` | 主机源码未公开；可先实现 UART 协议子集，`upgcmd -e` 作为对照 |
 | P0-4 | 上游文档同步机制 | ✅ | `tools/sync-upstream.ps1 -Check` 退出 0 | 2026-11-17 建立，10 个文件 + `UPSTREAM.json` |

@@ -30,6 +30,7 @@ const partlist = aic.partlist;
 const partcheck = aic.partcheck;
 const littlefs = aic.littlefs;
 const fsinstall = aic.fsinstall;
+const preboot = aic.preboot;
 const flashpack = aic.flashpack;
 const fw_image = aic.fw_image;
 const image = aic.image;
@@ -191,6 +192,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image partlist --config <image_cfg.json> --output <partition_file_list.h>
         \\  image partcheck -c <image_cfg.json> -d <packed-dir> [-t 90] [--strict]
         \\  image littlefs -i <dir> -o <image.lfs> -b <block> [-p <page>] [-s <size>] [-r <n>] [--all]
+        \\  image pbp -i <pbp.bin> -o <out.bin> [-m PBP2] [-k <pnk.bin>]
         \\  image flashpack [--config <image_cfg.json>] [--payload-dir <dir>] [--out-dir <dir>]
         \\  image dump <file>
         \\
@@ -1165,6 +1167,27 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         defer partcheck.deinitResult(aa, &result);
         try out.writeAll(result.text);
         if (hasFlag(rest, "--strict") and result.overflow > 0) return partcheck.Error.PartitionOverflow;
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "pbp")) {
+        const input = getOpt(rest, "--input") orelse getOpt(rest, "-i") orelse return error.MissingArgument;
+        const output = getOpt(rest, "--output") orelse getOpt(rest, "-o") orelse return error.MissingArgument;
+        const magic = getOpt(rest, "--magic") orelse getOpt(rest, "-m") orelse "PBP2";
+        const pnk = getOpt(rest, "--pnk") orelse getOpt(rest, "-k");
+        const result = preboot.build(aa, io, .{
+            .input = input,
+            .output = output,
+            .magic = magic,
+            .pnk = pnk,
+        }) catch |err| {
+            try out.print("pbp 失败：{s}（input={s}）\n", .{ @errorName(err), input });
+            return err;
+        };
+        try out.print(
+            "pbp: {s}（输入 {d} B，对齐后 {d} B，加密={s}）\n",
+            .{ output, result.input_size, result.padded_size, if (result.encrypted) "是" else "否" },
+        );
         return;
     }
 
