@@ -10,7 +10,7 @@
 |----|------|------|----------|------|
 | P0-1 | bootloader/PBP 资源打包（`mk_prebootprog.py`、`mk_private_resource.py`、`spienc`） | 🟡 | PBP/私有资源均与参考逐字节一致 | `mk_prebootprog`、`mk_private_resource` 已完成；spienc 保留官方 |
 | P0-2 | RTOS 内核（rt-thread/freertos/ucos-ii）与 HAL 驱动 | ⏸ | 官方 SDK | 同上；本仓库只做 OSAL/设备框架模拟 |
-| P0-3 | 主机烧写协议（upgcmd 源码 / UART USB 客户端） | 🟡 | 帧层/请求载荷与参考逐字节一致；**TCP 会话已跑通 mock server**（2026-11-18） | 已实现 `upg_frame`（AA55/CRC16-CCITT/55AA）、`upg_payload`（与 `json.dumps` 逐字节对齐）、`upg_client`（TCP 连 9100，一问一答 + 响应 cmd 校验）；CLI `wk upg … --send [--server-host/--server-port]`。**待做**：串口传输、分块上传循环与进度回执、真实 upgcmd server/设备联调 |
+| P0-3 | 主机烧写协议（upgcmd 源码 / UART USB 客户端） | 🟡 | 帧层/请求载荷与参考逐字节一致；TCP 会话 mock server 对拍 6 项全过；**读写超时实测 0.51 s 生效** | 已实现 `upg_frame`、`upg_payload`、`upg_client`（TCP，`--timeout` 走 `tcp.zig` 的 `SO_RCVTIMEO`）；CLI `wk upg … --send [--server-host/--server-port]`。**待做**：串口传输、分块上传循环与进度回执、真实 upgcmd server/设备联调 |
 | P0-4 | 上游文档同步机制 | ✅ | `tools/sync-upstream.ps1 -Check` 退出 0 | 2026-11-17 建立，10 个文件 + `UPSTREAM.json` |
 
 ## P1 · 镜像与安全
@@ -56,3 +56,15 @@
 6. P1-3 / P1-4 待上游源码（uffs 核心、firmware_security_encrypt），不猜测实现
 
 每个条目完成时：补单测/样本 → 与参考工具比对 → 在本表改状态 → `docs/决策记录.md` 记一条（含用户原话）。
+
+## 回归守卫（2026-11-18 建立）
+
+- **一键回归入口**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\regression.ps1`
+  → 构建 → 108 单测 → 夹具自建 → 17 个顶层命令 → 29 条 image 子命令 → fs/upg → 2 个 python 会话对拍；
+  退出码 0/1，报告 `artifacts/regression/report-<时间戳>.txt`。
+- **阈值只能抬高**：`MinTests=108`、`MinCases=34`；降阈值必须在决策记录里写实测依据。
+- **破坏性用例一律不碰仓库文件**：`fs clean` 等在自己的 `work-*/` 目录里造夹具。
+- **新增功能必须同时加用例**；确实无法自动化的留 `SKIP` + 原因（禁止静默跳过）。
+- 会话对拍脚本：`tools/checks/check_upg_send.py`（mock 服务端 6 项）、
+  `tools/checks/check_upg_timeout.py`（静默服务端超时 ≤2 s 且已发出请求帧）。
+

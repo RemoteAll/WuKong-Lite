@@ -457,6 +457,10 @@ fn cmdUpg(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std
     const net: ?upg_client.NetOptions = if (hasFlag(rest, "--send")) .{
         .host = getOpt(rest, "--server-host") orelse "127.0.0.1",
         .port = if (getOpt(rest, "--server-port")) |v| (std.fmt.parseInt(u16, v, 0) catch return error.InvalidArgument) else 9100,
+        .timeout_ms = if (getOpt(rest, "--timeout")) |v|
+            (std.fmt.parseInt(u32, v, 0) catch return error.InvalidArgument)
+        else
+            5000,
     } else null;
 
     const simple = [_]struct { name: []const u8, cmd: u8 }{
@@ -562,7 +566,7 @@ fn emitUpgFrame(
     try out.writeAll("\n");
 
     const opt = net orelse return;
-    var session = upg_client.Session.connect(aa, io, opt) catch |err| {
+    var session = upg_client.Session.connect(aa, opt) catch |err| {
         try out.print("upg: 连接 {s}:{d} 失败（{s}）\n", .{ opt.host, opt.port, @errorName(err) });
         return err;
     };

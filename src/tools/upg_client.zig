@@ -3,40 +3,48 @@
 //! 只做「连接 + 发一帧 + 收一帧」的最小会话；连续多帧（上传分块）由上层按需调用。
 //! 协议细节见 `upg_frame.zig`（帧/CRC）与 `upg_payload.zig`（载荷形状）。
 //!
-//! 说明：connect 与 read 都是阻塞调用。
-//! **Zig 0.17 在 Windows 上尚未实现带 timeout 的 `netConnectIp`**（会 panic
-//! `TODO implement netConnectIpWindows with timeout`），所以这里固定 `.none`，
-//! 连接超时交由操作系统默认值；主机名必须先解析成 IP（`IpAddress.parse` 不做 DNS）。
+//! 说明：传输层用 `tcp.zig`（Windows 走 ws2_32 + SO_RCVTIMEO，POSIX 走 std.posix），
+//! 因为 Zig 0.17.1 的 `std.Io` 在 Windows 上不支持带期限的网络读（详见 tcp.zig 顶部说明）。
+//! 主机名必须先解成 IP 字面量（不做 DNS）。
 const std = @import("std");
 const upg_frame = @import("upg_frame.zig");
+const tcp = @import("tcp.zig");
 
 pub const Error = error{
     BadHost,
     NotConnected,
     UnexpectedResponse,
     ConnectionClosed,
+    Timeout,
+    ConnectionRefused,
 };
 
 pub const NetOptions = struct {
     host: []const u8 = "127.0.0.1",
     port: u16 = 9100,
+    /// 单次收发的期限（毫秒，0=不限）。
+    timeout_ms: u32 = 5000,
 };
 
 pub const Session = struct {
     allocator: std.mem.Allocator,
-    io: std.Io,
-    stream: std.Io.net.Stream,
+    conn: tcp.Conn,
     buf: std.ArrayList(u8) = .empty,
-    write_buf: [4096]u8 = undefined,
 
-    pub fn connect(allocator: std.mem.Allocator, io: std.Io, opt: NetOptions) !Session {
-        const addr = std.Io.net.IpAddress.parse(opt.host, opt.port) catch return Error.BadHost;
-        const stream = try addr.connect(io, .{ .mode = .stream, .protocol = .tcp });
-        return .{ .allocator = allocator, .io = io, .stream = stream };
+    pub fn connect(allocator: std.mem.Allocator, opt: NetOptions) !Session {
+        const conn = tcp.Conn.connect(opt.host, opt.port, opt.timeout_ms) catch |err| switch (err) {
+            error.BadHost => return Error.BadHost,
+            error.Timeout => return Error.Timeout,
+            error.ConnectionRefused => return Error.ConnectionRefused,
+            error.ConnectionClosed => return Error.ConnectionClosed,
+            error.Unexpected => return Error.NotConnected,
+            else => return err,
+        };
+        return .{ .allocator = allocator, .conn = conn };
     }
 
     pub fn deinit(self: *Session) void {
-        self.stream.close(self.io);
+        self.conn.close();
         self.buf.deinit(self.allocator);
         self.* = undefined;
     }
@@ -45,12 +53,10 @@ pub const Session = struct {
     pub fn send(self: *Session, cmd: u8, payload: []const u8) !void {
         const frame = try upg_frame.encode(self.allocator, cmd, payload);
         defer self.allocator.free(frame);
-        var w = self.stream.writer(self.io, &self.write_buf);
-        try w.interface.writeAll(frame);
-        try w.interface.flush();
+        try self.conn.sendAll(frame);
     }
 
-    /// 阻塞读一帧；返回的 payload 指向内部缓冲，下一次 `recv` 前有效。
+    /// 读一帧（每读带 OS 层超时）；返回的 payload 由调用者释放。
     pub fn recv(self: *Session) !upg_frame.Decoded {
         var chunk: [4096]u8 = undefined;
         while (true) {
@@ -69,16 +75,24 @@ pub const Session = struct {
                     else => return err,
                 }
             }
-            var slices = [_][]u8{&chunk};
-            const n = try self.stream.read(self.io, &slices);
+            const n = self.conn.recv(&chunk) catch |err| switch (err) {
+                error.Timeout => return Error.Timeout,
+                error.ConnectionClosed => return Error.ConnectionClosed,
+                else => return err,
+            };
             if (n == 0) return Error.ConnectionClosed;
             try self.buf.appendSlice(self.allocator, chunk[0..n]);
         }
     }
 
     /// 一问一答：发请求帧，读一帧并校验响应 cmd = req | 0x80。
-    /// 返回的 payload 由调用者释放。
-    pub fn request(self: *Session, allocator: std.mem.Allocator, cmd: u8, payload: []const u8) ![]u8 {
+    /// 返回的 payload 由调用者释放（`allocator` 用于返回副本，可与 Session 的不同）。
+    pub fn request(
+        self: *Session,
+        allocator: std.mem.Allocator,
+        cmd: u8,
+        payload: []const u8,
+    ) ![]u8 {
         try self.send(cmd, payload);
         const resp = try self.recv();
         defer allocator.free(resp.payload);
@@ -92,6 +106,5 @@ pub const Session = struct {
 // ---------------------------------------------------------------------------
 test "upg_client：BadHost 明确报错" {
     // 用不可解析的主机名触发 BadHost（不发包、不联网）
-    const io = std.testing.io;
-    try std.testing.expectError(Error.BadHost, Session.connect(std.testing.allocator, io, .{ .host = "localhost", .port = 1 }));
+    try std.testing.expectError(Error.BadHost, Session.connect(std.testing.allocator, .{ .host = "localhost", .port = 1 }));
 }
