@@ -40,7 +40,7 @@
 | `partition_check.py` | `src/tools/partcheck.zig`、`wk image partcheck` | 50%/125% 样本表格与 `--strict` 退出码同参考；jffs2/UBI 规则已覆盖（2026-11-18） |
 | `makelittlefs.py` | `src/tools/littlefs.zig`、`wk image littlefs` | 复用上游 littlefs 2.5；`mklittlefs -l/-u` 验证多文件/嵌套内容一致（2026-11-18） |
 | `fsinstall.py` | `src/tools/fsinstall.zig`、`wk fs install/clean` | 递归安装/单文件安装/清理；内容 SHA256 一致（2026-11-18） |
-| `mk_prebootprog.py` | `src/tools/preboot.zig`、`src/tools/des.zig`、`wk image pbp` | PBP2 头/256 对齐/校验和；AES-ECB、DES 标准向量；加密路径实测（2026-11-18） |
+| `mk_prebootprog.py` | `src/tools/preboot.zig`、`src/tools/des.zig`、`wk image pbp` | 明文与 PNK 加密 PBP 均与参考逐字节一致（512 B，DIFF=0；2026-11-18） |
 | `mk_private_resource.py` | `src/tools/privres.zig`、`wk image privres` | `pbp_cfg.json` 1712 B、`pbp_security.json` 52 B 均与参考逐字节一致（2026-11-18） |
 | `openssl`（AES/RSA 子集） | `crypt.zig`、`rsa.zig` | AES 双向逐字节；RSA 与 openssl 互通 |
 | `upgcmd`（使用侧） | `tools/fetch-upgcmd-deps.ps1`、`flash-*.ps1` | `-e` 解析本仓库 AIC.FW |
@@ -76,6 +76,10 @@
 ### P2：中间件/生态
 - `packages/artinchip`：ota、xip_ramcode、zipfs、uds、barcode、lvgl-ui、mpp、
   aic-startup-ui、pinmux-check、thread_stack_trace、profiler 等；
+- **GUI 支持范围**：官方仅集成 LVGL（`application/Kconfig` 的 `LPKG_USING_LVGL`
+  可选 V8/V9，`packages/artinchip/lvgl-ui` 提供 LVGL 与 demo）；未发现 AWTK/emWin/
+  Qt/GuiLite 等其它 GUI 包。显示/MPP 驱动与 GUI 解耦，第三方 GUI 需自行移植；
+  WuKong-Lite 侧 GUI/显示仍属设备侧未迁移部分。
 - `packages/third-party`：lwIP、mbedTLS、littlefs、cherryusb、sqlite、LVGL、
   MicroPython、蓝牙/WiFi、音视频编解码等；
 - 官方文档全量离线站（topics/images/webhelp）。

@@ -24,11 +24,11 @@ pub const SECT_SECURITY_KEYDATA: u32 = 0x41490008;
 pub const SECT_END: u32 = 0x4149FFFF;
 
 const DDR_FIELDS = [_][]const u8{
-    "type",     "memsize", "freq",   "zq",     "odt",    "para1",  "para2",
-    "mr0",      "mr1",     "mr2",    "mr3",    "mr4",     "mr5",    "mr6",
-    "tpr0",     "tpr1",    "tpr2",   "tpr3",   "tpr4",    "tpr5",   "tpr6",
-    "tpr7",     "tpr8",    "tpr9",   "tpr10",  "tpr11",   "tpr12",  "tpr13",
-    "tpr14",    "tpr15",   "tpr16",  "tpr17",  "tpr18",
+    "type",  "memsize", "freq",  "zq",    "odt",   "para1", "para2",
+    "mr0",   "mr1",     "mr2",   "mr3",   "mr4",   "mr5",   "mr6",
+    "tpr0",  "tpr1",    "tpr2",  "tpr3",  "tpr4",  "tpr5",  "tpr6",
+    "tpr7",  "tpr8",    "tpr9",  "tpr10", "tpr11", "tpr12", "tpr13",
+    "tpr14", "tpr15",   "tpr16", "tpr17", "tpr18",
 };
 
 const PSRAM_COMMON_FIELDS = [_][]const u8{
@@ -52,19 +52,23 @@ const PSRAM_BACKUP_FIELDS = [_][]const u8{
 };
 
 const UART_FIELDS = [_][]const u8{
-    "uart_id", "uart_tx_pin_cfg_reg", "uart_tx_pin_cfg_val",
+    "uart_id",             "uart_tx_pin_cfg_reg", "uart_tx_pin_cfg_val",
     "uart_rx_pin_cfg_reg", "uart_rx_pin_cfg_val",
 };
 const JTAG_FIELDS = [_][]const u8{
     "jtag_id",
-    "jtag_do_pin_cfg_reg", "jtag_do_pin_cfg_val",
-    "jtag_di_pin_cfg_reg", "jtag_di_pin_cfg_val",
-    "jtag_ms_pin_cfg_reg", "jtag_ms_pin_cfg_val",
-    "jtag_ck_pin_cfg_reg", "jtag_ck_pin_cfg_val",
+    "jtag_do_pin_cfg_reg",
+    "jtag_do_pin_cfg_val",
+    "jtag_di_pin_cfg_reg",
+    "jtag_di_pin_cfg_val",
+    "jtag_ms_pin_cfg_reg",
+    "jtag_ms_pin_cfg_val",
+    "jtag_ck_pin_cfg_reg",
+    "jtag_ck_pin_cfg_val",
 };
 const REGCFG_FIELDS = [_][]const u8{ "reg", "val", "dly" };
 const UPGMODE_FIELDS = [_][]const u8{
-    "upgmode_pin_cfg_reg", "upgmode_pin_cfg_val",
+    "upgmode_pin_cfg_reg",   "upgmode_pin_cfg_val",
     "upgmode_pin_input_reg", "upgmode_pin_input_msk",
     "upgmode_pin_input_val", "upgmode_pin_pullup_dly",
 };

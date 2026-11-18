@@ -43,10 +43,12 @@ fn checksum(bytes: []const u8) u32 {
     return ~total;
 }
 
-/// PNK（8 字节 DES 密钥）→ AES-128 密钥：DES-ECB 加密 4 份原始长度。
-pub fn deriveAesKey(pnk: [8]u8, input_len: u32) [16]u8 {
+/// PNK（8 字节 DES 密钥）→ AES-128 密钥：DES-ECB 加密 4 份「填充后数据长度」。
+/// 参考脚本先填充 0x00 再调用 `do_pbp_encrypt`，所以种子是 padded data 长度，
+/// 不是原始输入长度。
+pub fn deriveAesKey(pnk: [8]u8, padded_data_len: u32) [16]u8 {
     var seed: [4]u8 = undefined;
-    std.mem.writeInt(u32, &seed, input_len, .little);
+    std.mem.writeInt(u32, &seed, padded_data_len, .little);
     var block: [16]u8 = undefined;
     @memcpy(block[0..4], &seed);
     @memcpy(block[4..8], &seed);
@@ -90,7 +92,7 @@ pub fn build(a: std.mem.Allocator, io: std.Io, opt: Options) !Result {
         const pnk_data = std.Io.Dir.cwd().readFileAlloc(io, pnk_path, a, .unlimited) catch return Error.BadPnk;
         defer a.free(pnk_data);
         if (pnk_data.len != 8) return Error.BadPnk;
-        const key = deriveAesKey(pnk_data[0..8].*, @intCast(input.len));
+        const key = deriveAesKey(pnk_data[0..8].*, @intCast(data_len));
         aesEcbEncrypt(out[32..][0..data_len], key);
         encrypted = true;
     }
@@ -171,6 +173,10 @@ test "pbp：PNK 派生 AES 密钥并加密" {
     try std.testing.expect(r.encrypted);
     const out = try std.Io.Dir.cwd().readFileAlloc(io, out_path, a, .unlimited);
     defer a.free(out);
-    try std.testing.expect(!std.mem.eql(u8, out[32..48], "0123456789abcdef"));
+    // 参考 Crypto 计算：seed=224（填充后数据长度）→ AES key 043456a6d00c99a4...
+    try std.testing.expectEqualSlices(u8, &.{
+        0xBE, 0x9E, 0x02, 0x7F, 0x2B, 0xCE, 0xFE, 0x90,
+        0x16, 0xE2, 0x10, 0x6F, 0x33, 0x7C, 0xB1, 0x0B,
+    }, out[32..48]);
     try std.testing.expectEqual(@as(u32, 0), checksum(out));
 }
