@@ -65,14 +65,16 @@ python -m SCons -j8
 - 构建成功，最终镜像仍为 12,263,936 B；
 - `d13x.elf` 中存在 `wk_sdk_demo`、`wk_sdk_version` 符号；
 - `d13x.bin` 中存在 3 处 `[zig-sdk]` 日志字符串；
-- LVGL 官方 demo_hub 仍由官方 C 代码初始化，Zig SDK 只先打印版本/板卡/节拍。
+- `d13x.bin` 中存在 `Hello from Zig SDK`，Zig 通过 `lv_timer_create` 在 LVGL 线程
+  上下文创建并居中显示 Label；
+- LVGL 官方 demo_hub 仍由官方 C 代码初始化，Zig 只追加自己的 Label。
 
 含 Zig SDK 的镜像：
 
 ```text
 artifacts/lvgl-firmware/d13x_demo88-nor_zig_v1.0.0.img
 大小：12,263,936 B
-SHA256：FBAF08C83A5A604AB8E8BB33D9AD1DBDFDFD6A05E02A3DFAE79229ECE38E7D67
+SHA256：B46EF447896888C6FE163BBB29557922DC6A0FECFBF98D23350AC4DBAA05FFCD
 ```
 
 `upgcmd -e` 已验证可解析全部组件。
@@ -82,8 +84,7 @@ SHA256：FBAF08C83A5A604AB8E8BB33D9AD1DBDFDFD6A05E02A3DFAE79229ECE38E7D67
 
 ## 6. 下一步
 
-- 用 `lv_timer_create` 在 LVGL 线程上下文里创建一个 Zig 回调，
-  由 Zig 创建 Label / 修改文本，验证 Zig UI 代码；
+- 把 Label 改成按钮/图片等控件，补 `lv_obj_set_style_*`、`lv_event` 绑定；
 - 补 UART、I2C、显示 framebuffer 等 HAL 包装；
 - 把业务逻辑逐步迁到 `device/`，官方 C 驱动保持不动。
 

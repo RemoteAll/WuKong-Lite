@@ -18,11 +18,11 @@ pub extern fn rt_pin_read(pin: i32) c_int;
 pub extern fn rt_pin_get(name: [*:0]const u8) i32;
 
 pub fn setMode(pin: i32, mode: Mode) void {
-    rt_pin_mode(pin, @intFromEnum(mode));
+    rt_pin_mode(pin, @backingInt(mode));
 }
 
 pub fn write(pin: i32, level: Level) void {
-    rt_pin_write(pin, @intFromEnum(level));
+    rt_pin_write(pin, @backingInt(level));
 }
 
 pub fn read(pin: i32) Level {
