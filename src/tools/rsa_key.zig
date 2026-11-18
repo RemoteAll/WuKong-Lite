@@ -175,35 +175,44 @@ pub fn loadKey(allocator: std.mem.Allocator, data: []const u8) !Key {
     const der = if (isPem(data)) try pemToDer(allocator, data) else try allocator.dupe(u8, data);
     errdefer allocator.free(der);
 
-    const pkcs1_der: []const u8 = if (!isPem(data))
-        der
-    else if (std.mem.find(u8, data, "RSA PRIVATE KEY") != null)
-        der
-    else if (std.mem.find(u8, data, "PRIVATE KEY") != null)
-        try unwrapPkcs8(der)
-    else if (std.mem.find(u8, data, "RSA PUBLIC KEY") != null)
-        der
-    else if (std.mem.find(u8, data, "PUBLIC KEY") != null)
-        try unwrapSpki(der)
-    else
-        return Error.UnsupportedKey;
+    // PEM 走标签判定；裸 DER 依次尝试 PKCS#1 私钥 → PKCS#8 私钥 → SPKI/ PKCS#1 公钥。
+    var pkcs1_der: []const u8 = der;
+    if (isPem(data)) {
+        if (std.mem.find(u8, data, "RSA PRIVATE KEY") != null) {
+            pkcs1_der = der;
+        } else if (std.mem.find(u8, data, "PRIVATE KEY") != null) {
+            pkcs1_der = try unwrapPkcs8(der);
+        } else if (std.mem.find(u8, data, "RSA PUBLIC KEY") != null) {
+            pkcs1_der = der;
+        } else if (std.mem.find(u8, data, "PUBLIC KEY") != null) {
+            pkcs1_der = try unwrapSpki(der);
+        } else {
+            return Error.UnsupportedKey;
+        }
+    }
 
-    // 先按私钥解析，失败再按公钥解析。
+    // 先按私钥解析；裸 DER 时再尝试 PKCS#8 内层。
     if (parsePkcs1Private(pkcs1_der)) |k| {
-        return .{
-            .der = der,
-            .kind = .private,
-            .n = k.n,
-            .e = k.e,
-            .d = k.d,
-            .p = k.p,
-            .q = k.q,
-            .u = k.qinv,
-        };
+        return .{ .der = der, .kind = .private, .n = k.n, .e = k.e, .d = k.d, .p = k.p, .q = k.q, .u = k.qinv };
     } else |_| {}
+    if (!isPem(data)) {
+        if (unwrapPkcs8(der)) |inner| {
+            if (parsePkcs1Private(inner)) |k| {
+                return .{ .der = der, .kind = .private, .n = k.n, .e = k.e, .d = k.d, .p = k.p, .q = k.q, .u = k.qinv };
+            } else |_| {}
+        } else |_| {}
+    }
 
-    const pub_key = try parsePkcs1Public(pkcs1_der);
-    return .{ .der = der, .kind = .public, .n = pub_key.n, .e = pub_key.e };
+    if (parsePkcs1Public(pkcs1_der)) |pub_key| {
+        return .{ .der = der, .kind = .public, .n = pub_key.n, .e = pub_key.e };
+    } else |_| {}
+    if (!isPem(data)) {
+        if (unwrapSpki(der)) |inner| {
+            const pub_key = try parsePkcs1Public(inner);
+            return .{ .der = der, .kind = .public, .n = pub_key.n, .e = pub_key.e };
+        } else |_| {}
+    }
+    return Error.UnsupportedKey;
 }
 
 // ---------------------------------------------------------------------------
@@ -668,13 +677,16 @@ test "rsa_key：keysize 分档与参考脚本一致" {
 test "rsa_key：PKCS#1 公钥 DER 结构" {
     const a = std.testing.allocator;
     const n = [_]u8{ 0x80, 0x01 }; // 最高位为 1 → 需补 0x00
-    const e = [_]u8{0x01, 0x00, 0x01};
+    const e = [_]u8{ 0x01, 0x00, 0x01 };
     const der = try buildPublicDer(a, &n, &e);
     defer a.free(der);
     try std.testing.expectEqualSlices(u8, &[_]u8{
         0x30, 0x0a,
-        0x02, 0x03, 0x00, 0x80, 0x01,
-        0x02, 0x03, 0x01, 0x00, 0x01,
+        0x02, 0x03,
+        0x00, 0x80,
+        0x01, 0x02,
+        0x03, 0x01,
+        0x00, 0x01,
     }, der);
 }
 

@@ -232,4 +232,3 @@ test "sdk_update：无需修复的文件原样返回" {
     defer a.free(out);
     try std.testing.expectEqualStrings(clean, out);
 }
-
