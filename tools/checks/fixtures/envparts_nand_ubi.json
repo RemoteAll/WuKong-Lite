@@ -1,0 +1,26 @@
+{
+    "image": {
+        "info": { "platform": "d21x", "product": "env-ubi", "version": "1.0.0",
+                  "media": { "type": "spi-nand", "device_id": 0 } }
+    },
+    "spi-nand": {
+        "size": "128m",
+        "partitions": {
+            "spl": { "size": "1m" },
+            "os":  { "size": "8m" },
+            "rootfs": {
+                "size": "100m",
+                "ubi": {
+                    "rootfs_a": { "size": "40m" },
+                    "rootfs_b": { "offset": "0x2800000", "size": "40m" },
+                    "data":     { "size": "-" }
+                }
+            }
+        }
+    },
+    "pre-process": {
+        "uboot_env": {
+            "env.bin": { "file": "env.txt", "size": "4096" }
+        }
+    }
+}

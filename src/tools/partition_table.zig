@@ -20,6 +20,8 @@ pub const PartInfo = struct {
     size: u64,
     /// 配置中的原始 size 字符串（保留 "512k" 之类写法）
     size_str: []const u8 = "",
+    /// 配置中的原始 offset 字符串（如 "0x4400"）——参考脚本原样输出，不做数字格式化
+    offset_str: []const u8 = "",
     has_explicit_offset: bool = false,
 };
 
@@ -43,9 +45,11 @@ pub fn layout(allocator: std.mem.Allocator, root: std.json.Value, device_name: [
         const size_str = image_cfg.getStr(part_obj, "size") orelse return error.MissingPartitionSize;
         var size: u64 = try utils.sizeStrToInt(size_str);
         var explicit = false;
+        var offset_str: []const u8 = "";
         if (image_cfg.getStr(part_obj, "offset")) |off_str| {
             cursor = try utils.sizeStrToInt(off_str);
             explicit = true;
+            offset_str = off_str;
         }
         if (std.mem.eql(u8, std.mem.trim(u8, size_str, " \t"), "-")) {
             size = if (device_size > cursor) device_size - cursor else 0;
@@ -55,6 +59,7 @@ pub fn layout(allocator: std.mem.Allocator, root: std.json.Value, device_name: [
             .start = cursor,
             .size = size,
             .size_str = size_str,
+            .offset_str = offset_str,
             .has_explicit_offset = explicit,
         });
         cursor +%= size;
@@ -65,7 +70,9 @@ pub fn layout(allocator: std.mem.Allocator, root: std.json.Value, device_name: [
 fn appendItem(w: *std.Io.Writer, part: PartInfo) !void {
     try w.writeAll(part.size_str);
     if (part.has_explicit_offset) {
-        try w.print("@{X}", .{part.start});
+        // 参考 gen_partition_table.py / mk_image.py 都是 `"@{}".format(cfg["offset"])`，
+        // 即原样输出配置串（`0x4400` 而不是 `4400`）。
+        try w.print("@{s}", .{part.offset_str});
     }
     try w.print("({s})", .{part.name});
 }
@@ -129,7 +136,11 @@ pub fn generateHeader(allocator: std.mem.Allocator, root: std.json.Value) ![]u8 
                             first = false;
                             const vol = image_cfg.asObject(vent.value_ptr.*) orelse continue;
                             const vsize = image_cfg.getStr(vol, "size") orelse "-";
-                            try ubi_str.writer.print("{s}({s})", .{ vsize, vent.key_ptr.* });
+                            try ubi_str.writer.print("{s}", .{vsize});
+                            if (image_cfg.getStr(vol, "offset")) |voff| {
+                                try ubi_str.writer.print("@{s}", .{voff});
+                            }
+                            try ubi_str.writer.print("({s})", .{vent.key_ptr.*});
                         }
                         try ubi_devs.append(allocator, try ubi_str.toOwnedSlice());
                     }
@@ -256,7 +267,11 @@ pub fn generateJson(allocator: std.mem.Allocator, root: std.json.Value) ![]u8 {
                                     first = false;
                                     const vol = image_cfg.asObject(vent.value_ptr.*) orelse continue;
                                     const vsize = image_cfg.getStr(vol, "size") orelse "-";
-                                    try vol_str.writer.print("{s}({s})", .{ vsize, vent.key_ptr.* });
+                                    try vol_str.writer.print("{s}", .{vsize});
+                                    if (image_cfg.getStr(vol, "offset")) |voff| {
+                                        try vol_str.writer.print("@{s}", .{voff});
+                                    }
+                                    try vol_str.writer.print("({s})", .{vent.key_ptr.*});
                                 }
                                 try list.append(allocator, try vol_str.toOwnedSlice());
                                 try addPartType(&part_types, allocator, key);
@@ -393,7 +408,11 @@ pub fn partsForEnv(allocator: std.mem.Allocator, root: std.json.Value) ![]u8 {
                             first = false;
                             const vol = image_cfg.asObject(vent.value_ptr.*) orelse continue;
                             const vsize = image_cfg.getStr(vol, "size") orelse "-";
-                            try ubi_str.writer.print("{s}({s})", .{ vsize, vent.key_ptr.* });
+                            try ubi_str.writer.print("{s}", .{vsize});
+                            if (image_cfg.getStr(vol, "offset")) |voff| {
+                                try ubi_str.writer.print("@{s}", .{voff});
+                            }
+                            try ubi_str.writer.print("({s})", .{vent.key_ptr.*});
                         }
                         try ubi_devs.append(allocator, try ubi_str.toOwnedSlice());
                     }
@@ -513,4 +532,66 @@ test "生成 JSON 分区表" {
     try std.testing.expectEqual(@as(usize, 1), types.items.len);
     try std.testing.expectEqualStrings("mtd", types.items[0].string);
     try std.testing.expect(std.mem.startsWith(u8, json, "{\n\t\"partitions\": {\n\t\t\"mtd\" : "));
+}
+
+test "env 分区前缀：显式 offset 原样输出 + UBI 卷 + GPT" {
+    const allocator = std.testing.allocator;
+
+    // spi-nor：offset 必须原样（0x4400 而非 4400）
+    {
+        const cfg_text =
+            \\{"image":{"info":{"platform":"d13x","product":"p","version":"1","media":{"type":"spi-nor","device_id":0}}},
+            \\ "spi-nor":{"size":"16m","partitions":{"spl":{"offset":"0x4400","size":"495k"},
+            \\ "env":{"size":"128k"},"os":{"offset":"0x100000","size":"2m"},"rodata":{"size":"-"}}}}
+        ;
+        const normalized = try image_cfg.normalize(allocator, cfg_text);
+        defer allocator.free(normalized);
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, normalized, .{});
+        defer parsed.deinit();
+        const prefix = try partsForEnv(allocator, parsed.value);
+        defer allocator.free(prefix);
+        try std.testing.expectEqualStrings(
+            "MTD=spi0.0:495k@0x4400(spl),128k(env),2m@0x100000(os),-(rodata)\n",
+            prefix,
+        );
+    }
+
+    // spi-nand + ubi：卷的 offset 也要原样输出
+    {
+        const cfg_text =
+            \\{"image":{"info":{"platform":"d21x","product":"p","version":"1","media":{"type":"spi-nand","device_id":0}}},
+            \\ "spi-nand":{"size":"128m","partitions":{"spl":{"size":"1m"},"os":{"size":"8m"},
+            \\ "rootfs":{"size":"100m","ubi":{"rootfs_a":{"size":"40m"},
+            \\ "rootfs_b":{"offset":"0x2800000","size":"40m"},"data":{"size":"-"}}}}}}
+        ;
+        const normalized = try image_cfg.normalize(allocator, cfg_text);
+        defer allocator.free(normalized);
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, normalized, .{});
+        defer parsed.deinit();
+        const prefix = try partsForEnv(allocator, parsed.value);
+        defer allocator.free(prefix);
+        try std.testing.expectEqualStrings(
+            "MTD=spi0.0:1m(spl),8m(os),100m(rootfs)\nUBI=rootfs:40m(rootfs_a),40m@0x2800000(rootfs_b),-(data)\n",
+            prefix,
+        );
+    }
+
+    // mmc：GPT 与 parts_mmc 两行
+    {
+        const cfg_text =
+            \\{"image":{"info":{"platform":"d12p","product":"p","version":"1","media":{"type":"mmc","device_id":0}}},
+            \\ "mmc":{"size":"4096m","partitions":{"spl":{"offset":"0x4400","size":"495k"},
+            \\ "env":{"size":"256k"},"os":{"size":"32m"},"rodata":{"size":"-"}}}}
+        ;
+        const normalized = try image_cfg.normalize(allocator, cfg_text);
+        defer allocator.free(normalized);
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, normalized, .{});
+        defer parsed.deinit();
+        const prefix = try partsForEnv(allocator, parsed.value);
+        defer allocator.free(prefix);
+        try std.testing.expectEqualStrings(
+            "GPT=495k@0x4400(spl),256k(env),32m(os),-(rodata)\nparts_mmc=495k@0x4400(spl),256k(env),32m(os),-(rodata)\n",
+            prefix,
+        );
+    }
 }

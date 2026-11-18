@@ -1,0 +1,20 @@
+{
+    "image": {
+        "info": { "platform": "d12p", "product": "env-mmc", "version": "1.0.0",
+                  "media": { "type": "mmc", "device_id": 0 } }
+    },
+    "mmc": {
+        "size": "4096m",
+        "partitions": {
+            "spl":    { "offset": "0x4400", "size": "495k" },
+            "env":    { "size": "256k" },
+            "os":     { "size": "32m" },
+            "rodata": { "size": "-" }
+        }
+    },
+    "pre-process": {
+        "uboot_env": {
+            "env.bin": { "file": "env.txt", "size": "4096", "redundant": "enable" }
+        }
+    }
+}

@@ -140,6 +140,9 @@ fn runItb(
         const name = e.key_ptr.*;
         const obj = image_cfg.asObject(e.value_ptr.*) orelse return Error.BadConfig;
         const its_name = image_cfg.getStr(obj, "its") orelse return Error.BadConfig;
+        // 参考 `itb_create_image(..., keydir, dtbname)` 会用 keydir 做 FIT 签名/图像加密，
+        // 我们尚未实现（backlog P1-10）——宁可报错，也不能静默产出未签名 FIT。
+        if (image_cfg.getStr(obj, "keydir") != null) return Error.UnsupportedProc;
         const its_path = try resolveIn(allocator, io, datadir, its_name);
         defer allocator.free(its_path);
 

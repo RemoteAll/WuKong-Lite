@@ -1,0 +1,20 @@
+{
+    "image": {
+        "info": { "platform": "d13x", "product": "env-offset", "version": "1.0.0",
+                  "media": { "type": "spi-nor", "device_id": 0 } }
+    },
+    "spi-nor": {
+        "size": "16m",
+        "partitions": {
+            "spl":   { "offset": "0x4400", "size": "495k" },
+            "env":   { "size": "128k" },
+            "os":    { "offset": "0x100000", "size": "2m" },
+            "rodata": { "size": "-" }
+        }
+    },
+    "pre-process": {
+        "uboot_env": {
+            "env.bin": { "file": "env.txt", "size": "4096", "redundant": "enable" }
+        }
+    }
+}

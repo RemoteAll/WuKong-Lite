@@ -23,7 +23,7 @@
 | P1-4 | `firmware_security_encrypt`（AES-XTS/nonce/tweak） | ⛔ 受阻 | 已实测模式特征（见下） | 工具为预编译 exe，SDK 无源码。**实测事实**：只读密钥文件前 16 B（AES-128）；输入必须是 16 的整数倍、无填充；改明文第 2 块只影响第 2~N 块（前向链式）；已排除 ECB / CBC / CTR(XOR 流) / 纯 XTS 结构。无源码情况下不猜测实现，留待上游公开 |
 | P1-5 | `encrypt_rsa_key.py` | ✅ | `wk image rsakey` 与参考脚本**逐字节一致**（私钥 AES/DES 加密、公钥 PKCS#1/SPKI 四种组合） | 2026-11-18 完成；公钥+对称密钥参考脚本自身会崩，我们按语义实现并写明差异 |
 | P1-6 | AIC 启动镜像 v2 签名/加密 | ✅ | `wk image aicimage` 与 `mk_image.py -p` **6 组镜像逐字节一致**（RSA-2048/HMAC、AES-128-CBC 含 SSK 派生、MD5+校验和、with_ext） | 2026-11-19 完成。未支持：SM2/SM4/ChaCha20/AES-CTR、pbp2/private2（遇配置即报错） |
-| P1-9 | `pre-process` 流水线（`wk image preproc`） | ✅ | `priv.bin`/`env.bin`/`loader.aic` 与 `mk_image.py -p` **逐字节一致**；`kernel.itb` 结构对拍一致 | 2026-11-19 完成（`src/tools/preproc.zig`）。未实现：`elf2itb`、`aicboot`(v1 遗留)、`spienc`/`spienctool`/`data_crypt`（厂商预编译 exe） |
+| P1-9 | `pre-process` 流水线（`wk image preproc`） | ✅ | `priv.bin`/`env.bin`/`loader.aic` 与 `mk_image.py -p` **逐字节一致**；`kernel.itb` 结构对拍一致；env 分区前缀（offset/UBI/GPT）3 种媒体全部逐字节一致 | 2026-11-19 完成（`src/tools/preproc.zig`）。已修：分区 offset 必须**原样**输出（`@0x4400`）且 UBI 卷 offset 不能丢；`itb` 条目带 `keydir` 时**报错**（FIT 签名未实现，P1-10）。未实现：`elf2itb`、`aicboot`(v1 遗留)、`spienc`/`spienctool`/`data_crypt`（厂商预编译 exe） |
 | P1-10 | ITS `signature*`/`cipher` 节点（FIT 签名/图像加密） | ⬜ | 待做 | 参考实现是 SDK 自带的纯 Python `itbimage`（`_sign.py` RSA/SM2、`_cipher.py` AES-CBC/CTR/ChaCha20）；`mkimage.exe` 本身不支持。可先做 RSA-2048 签名 + AES-128-CBC 两条 |
 | P1-7 | `mkcpio` OTA（`ota-subimgs.cfg`、`ota_info.bin`、尺寸回填） | ✅ | `wk image ota` 生成 512B env + crc cpio；`cpio.exe -it` 可列出；size 回填实测 1024 | 2026-11-17 完成 |
 | P1-8 | `simg_dump` 等价 CLI | ✅ | `wk image simg --dump` 输出头/chunk 表，单测覆盖 | 2026-11-17 完成 |
@@ -62,15 +62,17 @@
 ## 回归守卫（2026-11-18 建立）
 
 - **一键回归入口**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\regression.ps1`
-  → 构建 → **114** 单测 → 夹具自建 → 17 个顶层命令 → 31 条 image 子命令 → fs/upg →
-  4 个 python 对拍（会话收发 / 读超时 / AIC 镜像签名加密 / pre-process 流水线）；
+  → 构建 → **115** 单测 → 夹具自建 → 14 个顶层命令 → 29 个 `image` 子命令 → fs/upg →
+  5 个 python 对拍（会话收发 / 读超时 / AIC 镜像签名加密 / pre-process 流水线 / env 分区前缀）；
   退出码 0/1，报告 `artifacts/regression/report-<时间戳>.txt`。
-- **阈值只能抬高**：`MinTests=114`、`MinCases=34`；降阈值必须在决策记录里写实测依据。
+  口径：CLI 用例 **53** 条（顶层 12 + image 29 + fs/upg 12）。
+- **阈值只能抬高**：`MinTests=115`、`MinCases=34`；降阈值必须在决策记录里写实测依据。
 - **破坏性用例一律不碰仓库文件**：`fs clean` 等在自己的 `work-*/` 目录里造夹具。
 - **新增功能必须同时加用例**；确实无法自动化的留 `SKIP` + 原因（禁止静默跳过）。
 - 会话对拍脚本：`tools/checks/check_upg_send.py`（mock 服务端 6 项）、
   `tools/checks/check_upg_timeout.py`（静默服务端超时 ≤2 s 且已发出请求帧）、
   `tools/checks/check_aicimage.py`（6 组 AIC 启动镜像与 `mk_image.py -p` 逐字节比对）、
   `tools/checks/check_preproc.py`（pre-process 流水线：3 个产物逐字节 + FIT 结构对拍）。
+  `tools/checks/check_envparts.py`（env 分区前缀：spi-nor 显式 offset / spi-nand+ubi / mmc GPT）。
   夹具在 `tools/checks/fixtures/`；参考 SDK 缺失时 SKIP 并说明原因。
 
