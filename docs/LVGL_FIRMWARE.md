@@ -68,6 +68,21 @@ build/luban-lite/output/d13x_demo88-nor_rt-thread_helloworld/images/d13x_demo88-
 `9F507AB8DC25CB31C4F4439E5842EF62FF3B0EE61382A841728760CFF1640BF2`。
 `upgcmd -e` 能解析出 `image.info`、`updater.psram/spl`、`target.spl/env/env_r/os/rodata/data`。
 
+## 2.1 C 版 mk_image 与 Zig pack 逐字节对比
+
+设备侧 bootloader/RTOS/HAL/LVGL 仍来自 C SDK；**镜像打包**可做等价对比：
+用同一批官方组件（`images/` 目录），分别由 C 版 `mk_image.py` 与
+`wk image pack` 生成 AIC.FW：
+
+```powershell
+wk image pack --config <images>/image_cfg.json --datadir <images> -o zig-pack.img
+```
+
+2026-11-18 实测：两边均为 `12,263,936` 字节，`DIFF=0`（逐字节完全一致）。
+因此当前可以确认：**AIC.FW 封装格式与 C 版对齐**；但不能据此说
+“设备侧固件已用 Zig 实现”——bootloader/OS/LVGL 仍是 C 代码。
+
+
 ## 3. 烧录
 
 ### 方式 A：USB（推荐）
