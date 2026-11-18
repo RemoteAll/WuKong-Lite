@@ -1,0 +1,45 @@
+{
+    "pre-process": {
+        "aicimage": {
+            "hmac-sign.aic": {
+                "head_ver": "0x00010001",
+                "loader": {
+                    "file": "bootloader.bin",
+                    "load address": "0x40100000",
+                },
+                "resource": {
+                    "private": "pbp_cfg.bin",
+                    "pubkey": "keys/rsa_public_key.der",
+                },
+                "encryption": {
+                    "algo": "aes-128-cbc",
+                    "key": "keys/aes-128-cbc-key.bin",
+                    "iv": "keys/aes-128-cbc-iv.bin",
+                },
+                "signature": {
+                    "algo": "hmac,sha256",
+                    "privkey": "keys/aes-128-cbc-key.bin",
+                },
+            },
+            "rawkey.aic": {
+                "head_ver": "0x00010001",
+                "loader": {
+                    "file": "bootloader.bin",
+                    "entry point": "0x40100100",
+                },
+                "resource": {
+                    "pbp": "d13x.pbp",
+                },
+                "encryption": {
+                    "algo": "aes-128-cbc",
+                    "key": "keys/aes-128-cbc-key.bin",
+                    "iv": "keys/aes-128-cbc-iv.bin",
+                },
+                "signature": {
+                    "algo": "rsa,2048",
+                    "privkey": "keys/rsa_private_key.der",
+                },
+            },
+        },
+    },
+}

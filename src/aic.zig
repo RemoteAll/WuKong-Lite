@@ -53,3 +53,4 @@ test {
     @import("std").testing.refAllDecls(@This());
 }
 pub const upg_client = @import("tools/upg_client.zig");
+pub const aicboot = @import("tools/aicboot.zig");

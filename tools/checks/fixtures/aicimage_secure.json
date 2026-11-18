@@ -1,0 +1,76 @@
+{
+    "pre-process": {
+        "aicimage": {
+            "usbupg-psram-init.aic": {
+                "head_ver": "0x00010001",
+                "resource": {
+                    "private": "pbp_cfg.bin",
+                    "pubkey": "keys/rsa_public_key.der",
+                    "pbp": "d13x.pbp",
+                },
+                "encryption": {
+                    "algo": "aes-128-cbc",
+                    "key": "keys/aes-128-cbc-key.bin",
+                    "iv": "keys/aes-128-cbc-iv.bin",
+                },
+                "ssk_derived_key": "true",
+                "signature": {
+                    "algo": "rsa,2048",
+                    "privkey": "keys/rsa_private_key.der",
+                },
+            },
+            "pbp_ext.aic": {
+                "head_ver": "0x00010001",
+                "resource": {
+                    "pbp": "d13x.pbp",
+                    "pubkey": "keys/rsa_public_key.der",
+                    "private": "pbp_cfg.bin",
+                },
+                "encryption": {
+                    "algo": "aes-128-cbc",
+                    "key": "keys/aes-128-cbc-key.bin",
+                    "iv": "keys/aes-128-cbc-iv.bin",
+                },
+                "ssk_derived_key": "true",
+                "signature": {
+                    "algo": "rsa,2048",
+                    "privkey": "keys/rsa_private_key.der",
+                },
+                "with_ext": "true",
+            },
+            "loader.aic": {
+                "head_ver": "0x00010001",
+                "loader": {
+                    "file": "bootloader.bin",
+                    "load address": "0x40100000",
+                    "entry point": "0x40100100",
+                },
+                "resource": {
+                    "private": "pbp_cfg.bin",
+                    "pubkey": "keys/rsa_public_key.der",
+                },
+                "encryption": {
+                    "algo": "aes-128-cbc",
+                    "key": "keys/aes-128-cbc-key.bin",
+                    "iv": "keys/aes-128-cbc-iv.bin",
+                },
+                "ssk_derived_key": "true",
+                "signature": {
+                    "algo": "rsa,2048",
+                    "privkey": "keys/rsa_private_key.der",
+                },
+            },
+            "plain-md5.aic": {
+                "head_ver": "0x00010001",
+                "loader": {
+                    "file": "bootloader.bin",
+                    "load address": "0x40000000",
+                },
+                "resource": {
+                    "private": "pbp_cfg.bin",
+                    "pubkey": "keys/rsa_public_key.der",
+                },
+            },
+        },
+    },
+}

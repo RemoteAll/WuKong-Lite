@@ -58,7 +58,7 @@
 
 | 官方 | 已做 | 缺口 |
 |------|------|------|
-| `mkimage` 签名/加密 | 独立 RSA/AES 工具 | ITS `signature*`/`cipher` 节点、AIC 头 `sign_algo/encrypt_algo`/iv 区间联动 |
+| `mkimage` 签名/加密 | `src/tools/aicboot.zig` + `wk image aicimage`：AIC 头 v2 的 `sign_algo`/`enc_algo`/iv 区间联动、RSA-2048 与 HMAC-SHA256 签名、AES-128-CBC（含 SSK 派生密钥）、MD5+校验和；6 组与 `mk_image.py -p` **逐字节一致**（2026-11-19） | ITS `signature*`/`cipher` 节点：本 SDK 的 `mkimage.exe` 实测打印 “Signing / verified boot not supported (CONFIG_FIT_SIGNATURE undefined)”，该路径在本 SDK 不存在 |
 | `aic_build.py` | Kconfig→build_plan→codegen | SCons 全量构建、链接脚本/工具链选择、镜像后处理流水线 |
 | 官方文档 | aiburn 技能 | `topics/` 464 篇、`images/`、`webhelp/` 未迁（体积原因，可按需） |
 | 板级方案 | 1 个 Kconfig 方案 | d12x/d21x/多板 `target` 与 `pack/image_cfg.json` |

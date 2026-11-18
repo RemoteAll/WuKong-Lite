@@ -257,6 +257,47 @@ pub fn parsePrivatePem(allocator: std.mem.Allocator, pem: []const u8) !PrivateKe
     };
 }
 
+/// 解析 DER 私钥（自动区分 PKCS#1 `RSAPrivateKey` 与 PKCS#8 `PrivateKeyInfo`）。
+pub fn parsePrivateDer(allocator: std.mem.Allocator, der_in: []const u8) !PrivateKey {
+    const der = try allocator.dupe(u8, der_in);
+    errdefer allocator.free(der);
+
+    var pkcs1: []const u8 = der;
+    var inner: ?[]u8 = null;
+    defer if (inner) |i| allocator.free(i);
+
+    // PKCS#8 = SEQ { INTEGER version, SEQ algid, OCTET STRING(RSAPrivateKey) }
+    // PKCS#1 = SEQ { INTEGER version, INTEGER n, INTEGER e, INTEGER d, ... }
+    var outer = Der{ .data = der };
+    const seq = try outer.expect(0x30);
+    var probe = Der{ .data = seq };
+    const ver = try probe.readTlv();
+    if (ver.tag != 0x02) return Error.BadDer;
+    const second = try probe.readTlv();
+    if (second.tag == 0x30) {
+        var it = Der{ .data = seq };
+        _ = try it.expect(0x02); // version
+        _ = try it.expect(0x30); // AlgorithmIdentifier
+        const octet = try it.expect(0x04);
+        inner = try allocator.dupe(u8, octet);
+        pkcs1 = inner.?;
+    }
+
+    const parts = try parseRsaPrivate(pkcs1);
+    return .{
+        .der = der,
+        .n = try allocator.dupe(u8, parts.n),
+        .e = try allocator.dupe(u8, parts.e),
+        .d = try allocator.dupe(u8, parts.d),
+    };
+}
+
+/// 解析私钥：自动识别 PEM / DER（PKCS#1 或 PKCS#8）。
+pub fn parsePrivate(allocator: std.mem.Allocator, bytes: []const u8) !PrivateKey {
+    if (std.mem.find(u8, bytes, "-----BEGIN") != null) return parsePrivatePem(allocator, bytes);
+    return parsePrivateDer(allocator, bytes);
+}
+
 pub fn parsePublicPem(allocator: std.mem.Allocator, pem: []const u8) !PublicKey {
     const der = try pemToDer(allocator, pem);
     errdefer allocator.free(der);
@@ -389,4 +430,33 @@ test "RSA PKCS#1 v1.5 SHA-256 与 openssl 向量一致" {
     defer pub_key.deinit(allocator);
     try std.testing.expect(try verifySha256(allocator, &pub_key, test_data, sig));
     try std.testing.expect(!try verifySha256(allocator, &pub_key, "tampered", sig));
+}
+
+test "RSA DER 私钥（PKCS#1 / PKCS#8）与 PEM 等价" {
+    const allocator = std.testing.allocator;
+
+    // 由测试用 PEM 现解出 DER，避免再嵌一份 1KB 夹具
+    const der = try pemToDer(allocator, test_priv_pem);
+    defer allocator.free(der);
+
+    var from_der = try parsePrivateDer(allocator, der);
+    defer from_der.deinit(allocator);
+    var from_pem = try parsePrivatePem(allocator, test_priv_pem);
+    defer from_pem.deinit(allocator);
+    try std.testing.expectEqualSlices(u8, from_pem.n, from_der.n);
+    try std.testing.expectEqualSlices(u8, from_pem.e, from_der.e);
+    try std.testing.expectEqualSlices(u8, from_pem.d, from_der.d);
+
+    // parsePrivate 自动识别 DER / PEM
+    var auto_der = try parsePrivate(allocator, der);
+    defer auto_der.deinit(allocator);
+    try std.testing.expectEqualSlices(u8, from_pem.n, auto_der.n);
+    var auto_pem = try parsePrivate(allocator, test_priv_pem);
+    defer auto_pem.deinit(allocator);
+    try std.testing.expectEqualSlices(u8, from_pem.n, auto_pem.n);
+
+    // RSA-1024 的 keysize 必须是 64 字节标记（用签名长度间接确认）
+    const sig = try signSha256(allocator, &from_der, test_data);
+    defer allocator.free(sig);
+    try std.testing.expectEqual(@as(usize, 64), sig.len);
 }

@@ -1,4 +1,4 @@
-﻿//! WuKong-Lite 命令行入口（等价 Luban-Lite 的 `scons` + `tools/scripts/*` 工具集）。
+//! WuKong-Lite 命令行入口（等价 Luban-Lite 的 `scons` + `tools/scripts/*` 工具集）。
 //!
 //! 子命令：
 //!   wk defconfig <方案> | --list     应用 defconfig，生成 .config / cconfig.h
@@ -38,6 +38,7 @@ const upg_client = aic.upg_client;
 const panic = aic.panic;
 const preboot = aic.preboot;
 const privres = aic.privres;
+const aicboot = aic.aicboot;
 const rsa_key = aic.rsa_key;
 const flashpack = aic.flashpack;
 const fw_image = aic.fw_image;
@@ -664,6 +665,7 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image littlefs -i <dir> -o <image.lfs> -b <block> [-p <page>] [-s <size>] [-r <n>] [--all]
         \\  image pbp -i <pbp.bin> -o <out.bin> [-m PBP2] [-k <pnk.bin>]
         \\  image privres -c <cfg.json> [-l <cfg2.json,cfg3.json>] [-o <out.bin>]
+        \\  image aicimage -c <image_cfg.json> -d <datadir> [-k <keydir>]   (AIC 启动镜像 v2：签名/加密)
         \\  image rsakey -r <key.pem|der> [--aes-key <16B> | --des-key <8B>] [-o <outdir>]
         \\  image flashpack [--config <image_cfg.json>] [--payload-dir <dir>] [--out-dir <dir>]
         \\  image dump <file>
@@ -1715,6 +1717,28 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         defer aa.free(data);
         try writeBytes(io, output, data);
         try out.print("privres: {d} B -> {s}\n", .{ data.len, output });
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "aicimage")) {
+        const cfg = getOpt(rest, "--config") orelse getOpt(rest, "-c") orelse return error.MissingArgument;
+        const datadir = getOpt(rest, "--datadir") orelse getOpt(rest, "-d") orelse return error.MissingArgument;
+        const keydir = getOpt(rest, "--keydir") orelse getOpt(rest, "-k");
+        const gens = aicboot.preprocess(aa, io, .{
+            .cfg_path = cfg,
+            .datadir = datadir,
+            .keydir = keydir,
+        }) catch |err| {
+            try out.print("aicimage 失败：{s}（config={s}，datadir={s}）\n", .{ @errorName(err), cfg, datadir });
+            return err;
+        };
+        defer {
+            for (gens) |g| aa.free(g.name);
+            aa.free(gens);
+        }
+        for (gens) |g| {
+            try out.print("aicimage: {s} {d} B\n", .{ g.name, g.size });
+        }
         return;
     }
 
