@@ -90,7 +90,8 @@ pub fn build(allocator: std.mem.Allocator, root: *const Node) ![]u8 {
 
     try ctx.emit(root);
     try appendU32(&structure, allocator, FDT_END);
-    try padTo4(&strings, allocator);
+    // 字符串块**不**补齐：libfdt 与参考 `fdt` 库都按实际长度记录 `size_dt_strings`，
+    // 补 4 字节对齐会让 FIT 字节与参考不一致（配置签名的 hashed-strings 也跟着错）。
 
     const off_mem_rsvmap: u32 = HEADER_SIZE;
     const off_dt_struct: u32 = HEADER_SIZE + MEM_RSVMAP_SIZE;

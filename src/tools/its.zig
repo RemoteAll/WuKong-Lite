@@ -15,6 +15,7 @@
 const std = @import("std");
 const rsa = @import("rsa.zig");
 const fdt = @import("fdt.zig");
+const fdt_reader = @import("fdt_reader.zig");
 const crc32 = @import("../bsp/common/crc32.zig");
 
 pub const Prop = struct {
@@ -192,6 +193,478 @@ pub fn signImages(
         }
     }
     return signed;
+}
+
+// ----------------------------------------------------------------------
+// 配置签名：FDT 区域提取（等价 itbimage/_fdt_regions.py）+ RSA
+// ----------------------------------------------------------------------
+
+const Region = struct { off: usize, size: usize };
+
+const FDT_BEGIN_NODE: u32 = 1;
+const FDT_END_NODE: u32 = 2;
+const FDT_PROP: u32 = 3;
+const FDT_NOP: u32 = 4;
+const FDT_END: u32 = 9;
+const FDT_MAX_DEPTH: usize = 32;
+
+fn fdtBe32(data: []const u8, off: usize) u32 {
+    if (off + 4 > data.len) return 0;
+    return std.mem.readInt(u32, data[off..][0..4], .big);
+}
+
+fn fdtCStr(data: []const u8, off: usize) []const u8 {
+    if (off >= data.len) return "";
+    const rest = data[off..];
+    const end = std.mem.findScalar(u8, rest, 0) orelse return rest;
+    return rest[0..end];
+}
+
+fn nameInList(list: []const []const u8, name: []const u8) bool {
+    for (list) |item| {
+        if (std.mem.eql(u8, std.mem.trimEnd(u8, item, "/"), name)) return true;
+    }
+    return false;
+}
+
+fn joinFdtPath(
+    buf: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    parts: []const []const u8,
+) ![]const u8 {
+    buf.clearRetainingCapacity();
+    try buf.append(allocator, '/');
+    var first = true;
+    for (parts) |p| {
+        if (p.len == 0) continue;
+        if (!first) try buf.append(allocator, '/');
+        try buf.appendSlice(allocator, p);
+        first = false;
+    }
+    return buf.items;
+}
+
+const RegionSet = struct {
+    regions: []Region,
+    hashed_nodes: [][]const u8,
+
+    fn deinit(self: RegionSet, allocator: std.mem.Allocator) void {
+        allocator.free(self.regions);
+        for (self.hashed_nodes) |p| allocator.free(p);
+        allocator.free(self.hashed_nodes);
+    }
+};
+
+/// 区域游标推进（对应参考里三段重复的 start/close 逻辑）。
+fn regionStep(
+    regions: *std.ArrayList(Region),
+    allocator: std.mem.Allocator,
+    include: bool,
+    start: *?usize,
+    offset: usize,
+    stop: usize,
+) !void {
+    if (include) {
+        if (start.* == null) {
+            if (regions.items.len > 0) {
+                const last = regions.items[regions.items.len - 1];
+                if (offset == last.off + last.size) {
+                    start.* = last.off;
+                    _ = regions.pop();
+                    return;
+                }
+            }
+            start.* = offset;
+        }
+    } else if (start.*) |s| {
+        try regions.append(allocator, .{ .off = s, .size = stop - s });
+        start.* = null;
+    }
+}
+
+/// `itbimage/_fdt_regions.find_regions()` 的移植（u-boot `fdt_find_regions` 语义）。
+///
+/// 只包含「命中 path 的节点自身属性与结构 tag」，子节点属性不含；
+/// `exc_props` 里的属性一律跳过；`add_string_tab` 时最后一段额外覆盖字符串表。
+fn findRegions(
+    allocator: std.mem.Allocator,
+    dtb: []const u8,
+    inc_paths: []const []const u8,
+    exc_props: []const []const u8,
+    add_string_tab: bool,
+) !RegionSet {
+    const base: usize = fdtBe32(dtb, 8);
+    const strings_base: usize = fdtBe32(dtb, 12);
+    const strings_sz: usize = fdtBe32(dtb, 32);
+    const struct_sz: usize = fdtBe32(dtb, 36);
+    const end_idx: usize = if (struct_sz != 0) base + struct_sz else dtb.len;
+
+    var regions: std.ArrayList(Region) = .empty;
+    defer regions.deinit(allocator);
+    var hashed: std.ArrayList([]const u8) = .empty;
+    defer hashed.deinit(allocator);
+    var parts: std.ArrayList([]const u8) = .empty;
+    defer parts.deinit(allocator);
+    var path_buf: std.ArrayList(u8) = .empty;
+    defer path_buf.deinit(allocator);
+
+    var stack_want: [FDT_MAX_DEPTH]usize = @splat(0);
+    var depth: isize = -1;
+    var want: usize = 0;
+    var start: ?usize = null;
+
+    var idx: usize = base;
+    while (idx < end_idx and idx + 4 <= dtb.len) {
+        const tag = fdtBe32(dtb, idx);
+        const offset = idx;
+
+        if (tag == FDT_BEGIN_NODE) {
+            idx += 4;
+            const name = fdtCStr(dtb, idx);
+            idx = (idx + name.len + 4) & ~@as(usize, 3);
+            depth += 1;
+            if (depth >= @as(isize, @intCast(FDT_MAX_DEPTH))) return error.FdtTooDeep;
+            try parts.append(allocator, name);
+            const cur = try joinFdtPath(&path_buf, allocator, parts.items);
+            const key = std.mem.trimEnd(u8, cur, "/");
+
+            stack_want[@intCast(depth)] = want;
+            if (nameInList(inc_paths, key)) {
+                want = 2;
+                try hashed.append(allocator, try allocator.dupe(u8, cur));
+            } else if (want > 0) {
+                want -= 1;
+            }
+            try regionStep(&regions, allocator, want > 0, &start, offset, offset);
+        } else if (tag == FDT_END_NODE) {
+            idx += 4;
+            const include = want > 0;
+            if (depth >= 0) {
+                want = stack_want[@intCast(depth)];
+                depth -= 1;
+            }
+            if (parts.items.len > 0) parts.items.len -= 1;
+            try regionStep(&regions, allocator, include, &start, offset, idx);
+        } else if (tag == FDT_PROP) {
+            idx += 4;
+            const prop_size: usize = fdtBe32(dtb, idx);
+            const name_off: usize = fdtBe32(dtb, idx + 4);
+            idx += 8;
+            const prop_name = fdtCStr(dtb, strings_base + name_off);
+            idx += prop_size;
+            idx = (idx + 3) & ~@as(usize, 3);
+
+            var include = want >= 2;
+            if (nameInList(exc_props, prop_name)) include = false;
+            try regionStep(&regions, allocator, include, &start, offset, offset);
+        } else if (tag == FDT_NOP) {
+            idx += 4;
+            const include = want >= 2;
+            if (include) {
+                if (start == null) start = offset;
+            } else if (start) |s| {
+                try regions.append(allocator, .{ .off = s, .size = offset - s });
+                start = null;
+            }
+        } else if (tag == FDT_END) {
+            idx += 4;
+            if (start == null) start = offset;
+            break;
+        } else {
+            return error.BadFdtTag;
+        }
+    }
+
+    if (start) |s| {
+        var size = idx - s;
+        if (add_string_tab) size += strings_sz;
+        try regions.append(allocator, .{ .off = s, .size = size });
+    }
+
+    return .{
+        .regions = try regions.toOwnedSlice(allocator),
+        .hashed_nodes = try hashed.toOwnedSlice(allocator),
+    };
+}
+
+/// 收集一条 config 签名要覆盖的节点路径（`_sign._collect_config_hash_paths`）。
+fn collectConfigPaths(
+    allocator: std.mem.Allocator,
+    root: *const Node,
+    conf: *const Node,
+    sig_node: *const Node,
+) ![][]const u8 {
+    var paths: std.ArrayList([]const u8) = .empty;
+    defer paths.deinit(allocator);
+
+    try paths.append(allocator, try std.fmt.allocPrint(allocator, "/configurations/{s}", .{conf.name}));
+
+    var types: std.ArrayList([]const u8) = .empty;
+    defer types.deinit(allocator);
+    if (propString(sig_node, "sign-images")) |raw| {
+        var it = std.mem.splitScalar(u8, raw, ',');
+        while (it.next()) |t| {
+            const trimmed = std.mem.trim(u8, t, " \t\r\n");
+            if (trimmed.len > 0) try types.append(allocator, trimmed);
+        }
+    } else {
+        try types.append(allocator, "firmware");
+        try types.append(allocator, "flat_dt");
+        try types.append(allocator, "script");
+    }
+
+    const images = findChild(root, "images");
+    for (types.items) |t| {
+        const p = conf.getProp(t) orelse continue;
+        var nit = std.mem.splitScalar(u8, std.mem.trimEnd(u8, p.data, "\u{0}"), 0);
+        while (nit.next()) |name_raw| {
+            const name = std.mem.trim(u8, name_raw, " \t\r\n");
+            if (name.len == 0) continue;
+            const imgs = images orelse continue;
+            var found = false;
+            for (imgs.children.items) |c| {
+                if (std.mem.eql(u8, c.name, name)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) continue;
+            try paths.append(allocator, try std.fmt.allocPrint(allocator, "/images/{s}", .{name}));
+        }
+    }
+    return try paths.toOwnedSlice(allocator);
+}
+
+/// 给 `configurations/*/signature-*` 节点写签名（等价 `_sign.sign_configurations`）。
+///
+/// 与图像签名的区别：签名对象不是 image data，而是「FDT 区域哈希」——
+/// 先按 `hashed-nodes` 规则提取 DTB 字节区域（跳过 `data`/`data-size`/
+/// `data-position`/`data-offset`，末尾附字符串表），再对这些字节做 SHA-256，
+/// 最后用 RSA 签这笔哈希；同时写出 `hashed-nodes` 与 `hashed-strings` 供
+/// 引导程序复算。
+pub fn signConfigurations(
+    self: *Parsed,
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    keydir: []const u8,
+    timestamp: u32,
+) !usize {
+    const confs = findChild(self.root, "configurations") orelse return 0;
+    const a = self.arena.allocator();
+    const exc_props = [_][]const u8{ "data", "data-size", "data-position", "data-offset" };
+    var signed: usize = 0;
+
+    for (confs.children.items) |conf| {
+        for (conf.children.items) |sig_node| {
+            if (!std.mem.startsWith(u8, sig_node.name, "signature")) continue;
+            const algo = propString(sig_node, "algo") orelse continue;
+            const hint = propString(sig_node, "key-name-hint") orelse continue;
+            if (!std.mem.startsWith(u8, algo, "sha256")) return error.UnsupportedAlgo;
+
+            const paths = try collectConfigPaths(a, self.root, conf, sig_node);
+
+            // 参考在 image 签名写完之后序列化一次，用这份 DTB 取区域。
+            const dtb = try self.buildFdt(allocator, timestamp);
+            defer allocator.free(dtb);
+            const strings_sz = fdtBe32(dtb, 32);
+
+            const res = try findRegions(allocator, dtb, paths, &exc_props, true);
+            defer res.deinit(allocator);
+            if (res.regions.len == 0) return error.NoRegions;
+
+            var buf: std.ArrayList(u8) = .empty;
+            defer buf.deinit(allocator);
+            for (res.regions) |r| {
+                if (r.off + r.size > dtb.len) return error.BadRegion;
+                try buf.appendSlice(allocator, dtb[r.off..][0..r.size]);
+            }
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(buf.items, &digest, .{});
+
+            const key_path = try std.fmt.allocPrint(allocator, "{s}/{s}.key", .{
+                std.mem.trimEnd(u8, keydir, "/\\"), hint,
+            });
+            defer allocator.free(key_path);
+            const key_bytes = std.Io.Dir.cwd().readFileAlloc(io, key_path, allocator, .unlimited) catch
+                return error.MissingKey;
+            defer allocator.free(key_bytes);
+
+            var key = try rsa.parsePrivate(allocator, key_bytes);
+            defer key.deinit(allocator);
+            const sig = try rsa.signSha256(allocator, &key, &digest);
+            defer allocator.free(sig);
+
+            try setBytesProp(sig_node, a, "value", sig);
+            try setBytesProp(sig_node, a, "signer-name", "mkimage\x00");
+            try setBytesProp(sig_node, a, "signer-version", "1.0.0\x00");
+            try setU32Prop(sig_node, a, "timestamp", timestamp);
+
+            var hn: std.ArrayList(u8) = .empty;
+            defer hn.deinit(allocator);
+            for (res.hashed_nodes) |p| {
+                try hn.appendSlice(allocator, p);
+                try hn.append(allocator, 0);
+            }
+            try setBytesProp(sig_node, a, "hashed-nodes", hn.items);
+
+            var hs: [8]u8 = undefined;
+            std.mem.writeInt(u32, hs[0..4], 0, .big);
+            std.mem.writeInt(u32, hs[4..8], strings_sz, .big);
+            try setBytesProp(sig_node, a, "hashed-strings", &hs);
+
+            signed += 1;
+        }
+    }
+    return signed;
+}
+
+// ----------------------------------------------------------------------
+// 公钥注入（等价 _sign.inject_pubkeys / u-boot rsa_add_verify_data）
+// ----------------------------------------------------------------------
+
+/// 去掉大端整数前导零（参考按整数 `to_bytes((bit_length+7)//8)` 生成）。
+fn stripLeadingZeros(bytes: []const u8) []const u8 {
+    var i: usize = 0;
+    while (i < bytes.len and bytes[i] == 0) i += 1;
+    return bytes[i..];
+}
+
+/// 精确位长（模数最高位为 1 时等于字节数*8）。
+fn bitLength(bytes: []const u8) u32 {
+    const s = stripLeadingZeros(bytes);
+    if (s.len == 0) return 0;
+    const lead: u32 = @clz(s[0]);
+    return @as(u32, @intCast(s.len)) * 8 - lead;
+}
+
+/// `n^{-1} mod 2^32`（n 必须是奇数；牛顿迭代每次翻倍精度）。
+fn invMod2p32(n: u32) u32 {
+    var x: u32 = 1;
+    var i: usize = 0;
+    while (i < 5) : (i += 1) x *%= 2 -% n *% x;
+    return x;
+}
+
+fn readerToItsNode(allocator: std.mem.Allocator, rnode: *const fdt_reader.Node) !*Node {
+    const node = try allocator.create(Node);
+    node.* = .{ .name = rnode.name };
+    for (rnode.props.items) |p| {
+        try node.props.append(allocator, .{ .name = p.name, .data = p.value });
+    }
+    for (rnode.children.items) |c| {
+        try node.children.append(allocator, try readerToItsNode(allocator, c));
+    }
+    return node;
+}
+
+/// 把 `{keydir}/*.key` 的公钥写入目标 DTB 的 `/signature/<key-name>` 节点。
+///
+/// 等价参考 `_sign.inject_pubkeys()`（u-boot `rsa_add_verify_data`）：
+/// 每个密钥写 `algo = "sha256,rsa<bits>"`、`rsa,num-bits`、`rsa,modulus`、
+/// `rsa,exponent`、`rsa,n0-inverse`（`-1/n mod 2^32`，Montgomery 用），
+/// `require_keys` 时再加 `required = "image"`。返回注入的密钥数。
+pub fn injectPubkeys(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    keydir: []const u8,
+    keydest: []const u8,
+    require_keys: bool,
+) !usize {
+    const blob = try std.Io.Dir.cwd().readFileAlloc(io, keydest, allocator, .unlimited);
+    defer allocator.free(blob);
+
+    var tree = try fdt_reader.parse(allocator, blob);
+    defer tree.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const root = try readerToItsNode(a, tree.root);
+
+    // 收集 `{keydir}/*.key`（排序保证输出稳定；参考用 os.listdir 顺序）
+    var dir = std.Io.Dir.cwd().openDir(io, keydir, .{ .iterate = true }) catch
+        return error.MissingKey;
+    defer dir.close(io);
+
+    var names: std.ArrayList([]u8) = .empty;
+    defer {
+        for (names.items) |n| a.free(n);
+        names.deinit(a);
+    }
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| {
+        if (entry.kind == .directory) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".key")) continue;
+        try names.append(a, try a.dupe(u8, entry.name));
+    }
+    std.mem.sort([]u8, names.items, {}, struct {
+        fn lessThan(_: void, lhs: []u8, rhs: []u8) bool {
+            return std.mem.lessThan(u8, lhs, rhs);
+        }
+    }.lessThan);
+
+    // `/signature` 节点（不存在则新建）
+    var sig_parent: *Node = blk: {
+        for (root.children.items) |c| {
+            if (std.mem.eql(u8, c.name, "signature")) break :blk c;
+        }
+        const node = try a.create(Node);
+        node.* = .{ .name = "signature" };
+        try root.children.append(a, node);
+        break :blk node;
+    };
+
+    var injected: usize = 0;
+    for (names.items) |file_name| {
+        const hint = file_name[0 .. file_name.len - 4];
+        const key_path = try std.fmt.allocPrint(a, "{s}/{s}", .{
+            std.mem.trimEnd(u8, keydir, "/\\"), file_name,
+        });
+        const key_bytes = std.Io.Dir.cwd().readFileAlloc(io, key_path, allocator, .unlimited) catch
+            return error.MissingKey;
+        defer allocator.free(key_bytes);
+
+        var key = try rsa.parsePrivate(allocator, key_bytes);
+        defer key.deinit(allocator);
+
+        const n = stripLeadingZeros(key.n);
+        const e = stripLeadingZeros(key.e);
+        if (n.len == 0 or n.len % 4 != 0) return error.BadRsaKey;
+        const bits = bitLength(key.n);
+
+        // n0 = -1/n mod 2^32
+        const n_low = std.mem.readInt(u32, n[n.len - 4 ..][0..4], .big);
+        if (n_low % 2 == 0) return error.BadRsaKey;
+        const n0: u32 = 0 -% invMod2p32(n_low);
+
+        const key_node = try a.create(Node);
+        key_node.* = .{ .name = try a.dupe(u8, hint) };
+        try key_node.props.append(a, .{
+            .name = "algo",
+            .data = try std.fmt.allocPrint(a, "sha256,rsa{d}\x00", .{bits}),
+        });
+        var num_bits: [4]u8 = undefined;
+        std.mem.writeInt(u32, &num_bits, bits, .big);
+        try key_node.props.append(a, .{ .name = "rsa,num-bits", .data = try a.dupe(u8, &num_bits) });
+        try key_node.props.append(a, .{ .name = "rsa,modulus", .data = try a.dupe(u8, n) });
+        try key_node.props.append(a, .{ .name = "rsa,exponent", .data = try a.dupe(u8, e) });
+        var n0_bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &n0_bytes, n0, .big);
+        try key_node.props.append(a, .{ .name = "rsa,n0-inverse", .data = try a.dupe(u8, &n0_bytes) });
+        if (require_keys) {
+            try key_node.props.append(a, .{ .name = "required", .data = "image\x00" });
+        }
+        try sig_parent.children.append(a, key_node);
+        injected += 1;
+    }
+
+    if (injected == 0) return 0;
+
+    const out_blob = try fdt.build(allocator, try toFdtNode(a, root));
+    defer allocator.free(out_blob);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = keydest, .data = out_blob });
+    return injected;
 }
 
 fn setBytesProp(node: *Node, allocator: std.mem.Allocator, name: []const u8, value: []const u8) !void {
@@ -937,8 +1410,10 @@ fn postProcess(node: *Node, inherited_data: ?[]const u8, allocator: std.mem.Allo
         if (node.getProp("algo")) |algo_prop| {
             if (payload) |data| {
                 const digest = try digestFor(allocator, propDataStr(algo_prop.data), data);
-                // mkimage 把 value 放在 algo 之前
-                try node.props.insert(allocator, 0, .{ .name = "value", .data = digest });
+                // 参考 `_hash.compute_image_hashes` 用 `set_property`：已有则就地替换，
+                // 否则**追加在 algo 之后**（写成插到 0 会让 FIT 字节与参考不一致，
+                // 进而把配置签名的区域哈希带偏）。
+                try setBytesProp(node, allocator, "value", digest);
             }
         }
     }
@@ -957,7 +1432,9 @@ fn ensureTimestamp(parsed: *Parsed, timestamp: u32) !void {
             return;
         }
     }
-    try parsed.root.props.insert(allocator, 0, .{ .name = "timestamp", .data = bytes });
+    // 参考用 `fdt_obj.set_property("timestamp", ts)`：不存在时**追加在末尾**。
+    // （插到 0 会让 DTB 字节与参考不同，配置签名的区域哈希就跟着变。）
+    try parsed.root.props.append(allocator, .{ .name = "timestamp", .data = bytes });
 }
 
 fn toFdtNode(allocator: std.mem.Allocator, node: *const Node) !*const fdt.Node {
@@ -1073,8 +1550,77 @@ test "ITS 解析：字符串/单元/incbin/hash/timestamp" {
     std.mem.writeInt(u32, &crc_bytes, crc, .big);
     try std.testing.expect(std.mem.find(u8, blob, &crc_bytes) != null);
 
-    // timestamp 必须是根节点第一个属性
-    try std.testing.expectEqualStrings("timestamp", parsed.root.props.items[0].name);
+    // timestamp 追加在根节点属性末尾（参考 set_property 语义）；已存在则就地替换
+    try std.testing.expectEqualStrings("timestamp", parsed.root.props.items[parsed.root.props.items.len - 1].name);
+    const ts_prop = parsed.root.getProp("timestamp").?;
+    try std.testing.expectEqual(@as(u32, 0x1234_5678), std.mem.readInt(u32, ts_prop.data[0..4], .big));
+}
+
+test "findRegions：只覆盖命中节点自身属性与结构 tag" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const text =
+        \\/dts-v1/;
+        \\
+        \\/ {
+        \\    description = "regions";
+        \\
+        \\    images {
+        \\        kernel-1 {
+        \\            data = [01 02 03 04];
+        \\            hash-1 { algo = "sha256"; };
+        \\        };
+        \\    };
+        \\
+        \\    configurations {
+        \\        default = "conf-1";
+        \\        conf-1 {
+        \\            kernel = "kernel-1";
+        \\        };
+        \\    };
+        \\};
+        \\
+    ;
+    var parsed = try parseText(allocator, io, text, ".");
+    defer parsed.deinit();
+    const dtb = try parsed.buildFdt(allocator, 0x11223344);
+    defer allocator.free(dtb);
+
+    const exc = [_][]const u8{ "data", "data-size", "data-position", "data-offset" };
+    const inc = [_][]const u8{ "/configurations/conf-1", "/images/kernel-1" };
+    const res = try findRegions(allocator, dtb, &inc, &exc, true);
+    defer res.deinit(allocator);
+
+    // hashed-nodes 按 DTB 里的出现顺序：先 images 再 configurations
+    try std.testing.expectEqual(@as(usize, 2), res.hashed_nodes.len);
+    try std.testing.expectEqualStrings("/images/kernel-1", res.hashed_nodes[0]);
+    try std.testing.expectEqualStrings("/configurations/conf-1", res.hashed_nodes[1]);
+
+    // 最后一段必须带字符串表；所有区域都不能越界
+    try std.testing.expect(res.regions.len >= 1);
+    const last = res.regions[res.regions.len - 1];
+    try std.testing.expectEqual(dtb.len, last.off + last.size);
+    for (res.regions) |r| try std.testing.expect(r.off + r.size <= dtb.len);
+
+    // 被排除的 `data` 属性不能进入区域：改掉 data 后拼接哈希必须不变
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    for (res.regions) |r| try buf.appendSlice(allocator, dtb[r.off..][0..r.size]);
+    var digest_before: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(buf.items, &digest_before, .{});
+
+    const images = findChild(parsed.root, "images").?;
+    try setBytesProp(images.children.items[0], parsed.arena.allocator(), "data", &.{ 0xde, 0xad, 0xbe, 0xef });
+    const dtb2 = try parsed.buildFdt(allocator, 0x11223344);
+    defer allocator.free(dtb2);
+    const res2 = try findRegions(allocator, dtb2, &inc, &exc, true);
+    defer res2.deinit(allocator);
+    buf.clearRetainingCapacity();
+    for (res2.regions) |r| try buf.appendSlice(allocator, dtb2[r.off..][0..r.size]);
+    var digest_after: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(buf.items, &digest_after, .{});
+    try std.testing.expectEqualSlices(u8, &digest_before, &digest_after);
 }
 
 test "AES-192 密钥扩展与单块加密（FIPS-197 附录 C.2）" {
