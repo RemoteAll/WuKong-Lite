@@ -1865,11 +1865,14 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
             (std.fmt.parseFloat(f64, v) catch return error.InvalidArgument)
         else
             90;
-        var result = partcheck.run(aa, io, cfg_path, dir_path, threshold) catch |err| {
+        const verbose = hasFlag(rest, "--verbose") or hasFlag(rest, "-v");
+        var result = partcheck.runVerbose(aa, io, cfg_path, dir_path, threshold, verbose) catch |err| {
             try out.print("partcheck 失败：{s}\n", .{@errorName(err)});
             return err;
         };
         defer partcheck.deinitResult(aa, &result);
+        // 参考的 `dbg()` 在表格之前产生（parse_size / 跳过项 / 无内容可查）
+        if (result.debug.len > 0) try out.writeAll(result.debug);
         try out.writeAll(result.text);
         if (hasFlag(rest, "--strict") and result.overflow > 0) return partcheck.Error.PartitionOverflow;
         return;

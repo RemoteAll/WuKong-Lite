@@ -24,11 +24,71 @@ pub const Result = struct {
     media_type: []const u8,
     rows: []Row,
     overflow: usize,
+    /// 报告正文（含 ANSI 颜色，与参考 `print_info` 一致）。
     text: []u8,
+    /// `-v/--verbose` 的诊断行（同样带颜色，按参考 `dbg()` 的产生顺序累积）。
+    debug: []u8 = &.{},
+};
+
+/// 参考用 Python `print`，在 Windows 上每行以 CRLF 结束。
+fn platformNewline() []const u8 {
+    return if (@import("builtin").os.tag == .windows) "\r\n" else "\n";
+}
+
+/// 把文本里的 LF 换成平台换行（参考 `print` 的文本模式行为）。
+fn toPlatformNewlines(a: std.mem.Allocator, s: []const u8) ![]u8 {
+    if (@import("builtin").os.tag != .windows) return a.dupe(u8, s);
+    var out: std.Io.Writer.Allocating = .init(a);
+    errdefer out.deinit();
+    for (s) |c| {
+        if (c == '\n') {
+            try out.writer.writeAll("\r\n");
+        } else {
+            try out.writer.writeByte(c);
+        }
+    }
+    return out.toOwnedSlice();
+}
+
+/// 没有可检查内容时的空结果（保留 `-v` 诊断）。
+fn emptyResult(a: std.mem.Allocator, dbg: *Debug) !Result {
+    const rows: []Row = try a.alloc(Row, 0);
+    return .{
+        .media_type = "",
+        .rows = rows,
+        .overflow = 0,
+        .text = try a.dupe(u8, ""),
+        .debug = try a.dupe(u8, dbg.out.written()),
+    };
+}
+
+/// 参考的 `dbg()`：`-v` 时用 `print_info`（白底黑字）输出一条诊断。
+pub const Debug = struct {
+    verbose: bool = false,
+    out: std.Io.Writer.Allocating,
+
+    pub fn init(a: std.mem.Allocator, verbose: bool) Debug {
+        return .{ .verbose = verbose, .out = .init(a) };
+    }
+
+    pub fn deinit(self: *Debug) void {
+        self.out.deinit();
+    }
+
+    pub fn log(self: *Debug, comptime fmt: []const u8, args: anytype) void {
+        if (!self.verbose) return;
+        // Python 的 print 在 Windows 上写 CRLF，本机对拍要求逐字节一致
+        self.out.writer.print("\x1b[47;30m" ++ fmt ++ "\x1b[0m" ++ platformNewline(), args) catch {};
+    }
 };
 
 /// `9m` / `512k` / `768K` / `128m` / `4096` → 字节；`-` / 空 / `auto` → null。
 pub fn parseSize(text: []const u8) ?u64 {
+    return parseSizeDbg(text, null);
+}
+
+/// 同上，但无法识别时按参考 `dbg("Unrecognized size: %s")` 记录（`-`/`auto` 不算错误，不记录）。
+pub fn parseSizeDbg(text: []const u8, dbg: ?*Debug) ?u64 {
     const t = std.mem.trim(u8, text, " \t\r\n");
     if (t.len == 0) return null;
     if (std.mem.eql(u8, t, "-") or std.ascii.eqlIgnoreCase(t, "auto")) return null;
@@ -51,13 +111,25 @@ pub fn parseSize(text: []const u8) ?u64 {
         },
         else => {},
     }
-    const num = std.fmt.parseFloat(f64, value) catch return null;
+    const num = std.fmt.parseFloat(f64, value) catch {
+        if (dbg) |d| d.log("Unrecognized size: {s}", .{value});
+        return null;
+    };
     if (num < 0) return null;
     return @intFromFloat(num * @as(f64, @floatFromInt(mult)));
 }
 
 /// 单个分区容量；`part` 支持 `container:volume`。
 pub fn partCapacity(partitions: std.json.ObjectMap, part: []const u8) ?u64 {
+    return partCapacityDbg(partitions, part, null);
+}
+
+/// 同上，可选把无法识别的大小记录到 `dbg`。
+pub fn partCapacityDbg(
+    partitions: std.json.ObjectMap,
+    part: []const u8,
+    dbg: ?*Debug,
+) ?u64 {
     const colon = std.mem.findScalar(u8, part, ':');
     const container = if (colon) |i| part[0..i] else part;
     const volume = if (colon) |i| part[i + 1 ..] else "";
@@ -67,12 +139,12 @@ pub fn partCapacity(partitions: std.json.ObjectMap, part: []const u8) ?u64 {
     if (volume.len > 0) {
         if (image_cfg.getObj(node, "ubi")) |ubi| {
             if (image_cfg.getObj(ubi, volume)) |vol| {
-                if (image_cfg.getStr(vol, "size")) |s| size = parseSize(s);
+                if (image_cfg.getStr(vol, "size")) |s| size = parseSizeDbg(s, dbg);
             }
         }
     }
     if (size == null) {
-        if (image_cfg.getStr(node, "size")) |s| size = parseSize(s);
+        if (image_cfg.getStr(node, "size")) |s| size = parseSizeDbg(s, dbg);
     }
     return size;
 }
@@ -142,13 +214,35 @@ pub fn analyze(
     dir_path: []const u8,
     threshold: f64,
 ) !Result {
+    return analyzeVerbose(a, io, root_value, dir_path, threshold, false);
+}
+
+/// 同上，`verbose` 为真时按参考 `dbg()` 收集 `-v` 诊断。
+pub fn analyzeVerbose(
+    a: std.mem.Allocator,
+    io: std.Io,
+    root_value: std.json.Value,
+    dir_path: []const u8,
+    threshold: f64,
+    verbose: bool,
+) !Result {
+    var dbg = Debug.init(a, verbose);
+    defer dbg.deinit();
+
     const root_obj = image_cfg.asObject(root_value) orelse return Error.BadConfig;
     const image_obj = image_cfg.getObj(root_obj, "image") orelse return Error.BadConfig;
     const info_obj = image_cfg.getObj(image_obj, "info") orelse return Error.BadConfig;
-    const media_obj = image_cfg.getObj(info_obj, "media") orelse return Error.BadConfig;
-    const media_type = image_cfg.getStr(media_obj, "type") orelse return Error.BadConfig;
-
-    const media_root = image_cfg.getObj(root_obj, media_type) orelse return Error.BadConfig;
+    // 参考 `report()`：`media.type` 缺失 / 配置里没有对应 media 段时**只打一条 dbg 并返回**（不算错误）。
+    const media_obj = image_cfg.getObj(info_obj, "media");
+    const media_type = if (media_obj) |mo| image_cfg.getStr(mo, "type") else null;
+    if (media_type == null) {
+        dbg.log("No media section for type 'None'", .{});
+        return emptyResult(a, &dbg);
+    }
+    const media_root = image_cfg.getObj(root_obj, media_type.?) orelse {
+        dbg.log("No media section for type '{s}'", .{media_type.?});
+        return emptyResult(a, &dbg);
+    };
     const partitions = image_cfg.getObj(media_root, "partitions") orelse return Error.BadConfig;
     const targets = image_cfg.getObj(image_obj, "target") orelse return Error.BadConfig;
 
@@ -172,8 +266,14 @@ pub fn analyze(
 
         const full = try std.fs.path.join(a, &.{ dir_path, file });
         defer a.free(full);
-        const st = std.Io.Dir.cwd().statFile(io, full, .{}) catch continue;
-        if (st.kind != .file) continue;
+        const st = std.Io.Dir.cwd().statFile(io, full, .{}) catch {
+            dbg.log("Skip '{s}': not measurable", .{name});
+            continue;
+        };
+        if (st.kind != .file) {
+            dbg.log("Skip '{s}': not measurable", .{name});
+            continue;
+        }
 
         const part_arr = image_cfg.getArray(comp, "part") orelse continue;
         var cap: u64 = 0;
@@ -195,7 +295,7 @@ pub fn analyze(
             }
             if (part_names.items.len > 0) try part_names.append(a, ',');
             try part_names.appendSlice(a, part);
-            const size = partCapacity(partitions, part) orelse {
+            const size = partCapacityDbg(partitions, part, &dbg) orelse {
                 dynamic = true;
                 continue;
             };
@@ -203,6 +303,7 @@ pub fn analyze(
         }
 
         if (dynamic or cap == 0) {
+            var added = false;
             if (!has_ubi) {
                 if (image_cfg.getInt(comp, "part_size")) |resolved| {
                     if (resolved > 0) {
@@ -215,9 +316,12 @@ pub fn analyze(
                             .percent = @as(f64, @floatFromInt(used)) * 100.0 / @as(f64, @floatFromInt(resolved)),
                             .how = if (std.mem.endsWith(u8, file, ".jffs2")) "content" else "file",
                         });
+                        added = true;
                     }
                 }
             }
+            // 参考 `component_usage()` 返回 None 时统一 `dbg("Skip '<name>': not measurable")`
+            if (!added) dbg.log("Skip '{s}': not measurable", .{name});
             continue;
         }
 
@@ -230,6 +334,18 @@ pub fn analyze(
             .percent = @as(f64, @floatFromInt(used)) * 100.0 / @as(f64, @floatFromInt(cap)),
             .how = if (std.mem.endsWith(u8, file, ".jffs2")) "content" else "file",
         });
+    }
+
+    // 参考 `report()`：没有可测项时只打一条 dbg，**直接返回**（不出表格）
+    if (rows.items.len == 0) {
+        dbg.log("Nothing to check", .{});
+        return .{
+            .media_type = media_type.?,
+            .rows = try rows.toOwnedSlice(a),
+            .overflow = 0,
+            .text = try a.dupe(u8, ""),
+            .debug = try a.dupe(u8, dbg.out.written()),
+        };
     }
 
     std.mem.sort(Row, rows.items, {}, struct {
@@ -246,16 +362,28 @@ pub fn analyze(
     var out: std.Io.Writer.Allocating = .init(a);
     errdefer out.deinit();
     const w = &out.writer;
-    try w.print("Partition space occupancy ({s}):\n", .{media_type});
-    try w.writeAll("      image    partition          used  part_size   used%\n");
+    // 参考用 print_info（47;30 白底）/ print_warn（43;30 黄底）/ print_error（41;37 红底），
+    // 每行独立包裹颜色码 —— 必须逐字复刻，否则与本机参考产物无法逐字节对拍。
+    const COLOR_INFO = "\x1b[47;30m";
+    const COLOR_WARN = "\x1b[43;30m";
+    const COLOR_ERR = "\x1b[41;37m";
+    const COLOR_END = "\x1b[0m";
+
+    try w.print(COLOR_INFO ++ "Partition space occupancy ({s}):" ++ COLOR_END ++ "\n", .{media_type.?});
+    try w.print(COLOR_INFO ++ "      {s:<8} {s:<12} {s:>10} {s:>10} {s:>8}" ++ COLOR_END ++ "\n",
+        .{ "image", "partition", "used", "part_size", "used%" });
+
+    var worst: f64 = 0;
     for (rows.items) |r| {
-        try w.print(
-            "      {s:<8} {s:<12} {d:>10} {d:>10} {d:>7.1}% ({s})\n",
-            .{ r.image, r.partition, r.used, r.part_size, r.percent, r.how },
-        );
+        if (r.percent > worst) worst = r.percent;
+        const color = if (r.percent > 100.0) COLOR_ERR else if (r.percent > threshold) COLOR_WARN else COLOR_INFO;
+        try w.print("{s}      {s:<8} {s:<12} {d:>10} {d:>10} {d:>7.1}% ({s})" ++ COLOR_END ++ "\n", .{
+            color, r.image, r.partition, r.used, r.part_size, r.percent, r.how,
+        });
     }
+
     if (overflow > 0) {
-        try w.writeAll("Partition overflow: ");
+        try w.writeAll(COLOR_ERR ++ "Partition overflow: ");
         var first = true;
         for (rows.items) |r| {
             if (r.percent <= 100.0) continue;
@@ -263,16 +391,20 @@ pub fn analyze(
             first = false;
             try w.writeAll(r.image);
         }
-        try w.writeByte('\n');
-    } else if (rows.items.len > 0 and rows.items[0].percent > threshold) {
-        try w.print("Partition space is above {d}%\n", .{@as(u64, @intFromFloat(threshold))});
+        try w.writeAll(COLOR_END ++ "\n");
+    } else if (worst > threshold) {
+        try w.print(
+            COLOR_WARN ++ "Partition space is above {d}%, please trim images or re-balance the partition table" ++ COLOR_END ++ "\n",
+            .{@as(u64, @intFromFloat(threshold))},
+        );
     }
 
     return .{
-        .media_type = media_type,
+        .media_type = media_type.?,
         .rows = try rows.toOwnedSlice(a),
         .overflow = overflow,
-        .text = try out.toOwnedSlice(),
+        .text = try toPlatformNewlines(a, out.written()),
+        .debug = try a.dupe(u8, dbg.out.written()),
     };
 }
 
@@ -283,9 +415,20 @@ pub fn run(
     dir_path: []const u8,
     threshold: f64,
 ) !Result {
+    return runVerbose(a, io, cfg_path, dir_path, threshold, false);
+}
+
+pub fn runVerbose(
+    a: std.mem.Allocator,
+    io: std.Io,
+    cfg_path: []const u8,
+    dir_path: []const u8,
+    threshold: f64,
+    verbose: bool,
+) !Result {
     var cfg = try image_cfg.load(a, io, cfg_path);
     defer cfg.deinit();
-    return analyze(a, io, cfg.root().*, dir_path, threshold);
+    return analyzeVerbose(a, io, cfg.root().*, dir_path, threshold, verbose);
 }
 
 pub fn deinitResult(a: std.mem.Allocator, result: *Result) void {
@@ -294,6 +437,7 @@ pub fn deinitResult(a: std.mem.Allocator, result: *Result) void {
     }
     a.free(result.rows);
     a.free(result.text);
+    if (result.debug.len > 0) a.free(result.debug);
 }
 
 test "partcheck：parseSize" {
