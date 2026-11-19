@@ -1690,6 +1690,24 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         return;
     }
 
+    if (std.mem.eql(u8, sub, "extract")) {
+        const img = if (rest.len > 0 and !std.mem.startsWith(u8, rest[0], "-")) rest[0] else
+            (getOpt(rest, "--input") orelse getOpt(rest, "-i") orelse return error.MissingArgument);
+        const out_dir = getOpt(rest, "--output") orelse getOpt(rest, "-o");
+        const res = aic.fwextract.extract(aa, io, img, out_dir) catch |err| {
+            try out.print("extract 失败：{s}（img={s}）\n", .{ @errorName(err), img });
+            return err;
+        };
+        defer res.deinit(aa);
+        for (res.entries) |e| {
+            try out.print("  {s} {d} B\n", .{ e.name, e.size });
+        }
+        try out.print("解包: {s}（{d} 个组件", .{ res.out_dir, res.entries.len });
+        if (res.tar_entries > 0) try out.print("，其中 tar 解出 {d} 个", .{res.tar_entries});
+        try out.writeAll("）\n");
+        return;
+    }
+
     if (std.mem.eql(u8, sub, "uffs")) {
         const input_dir = getOpt(rest, "--input") orelse getOpt(rest, "-i") orelse return error.MissingArgument;
         const out_file = getOpt(rest, "--output") orelse getOpt(rest, "-o") orelse return error.MissingArgument;

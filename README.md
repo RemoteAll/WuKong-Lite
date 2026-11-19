@@ -158,6 +158,9 @@ zig-out\bin\wk.exe image linksize --map apps/hello_uart.map
 zig-out\bin\wk.exe image partlist --config pack/image_cfg.json --output pack/partition_file_list.h
 zig-out\bin\wk.exe image partcheck -c pack/image_cfg.json -d pack --strict
 zig-out\bin\wk.exe image littlefs -i payload/data -o pack/data.lfs -b 4096 -p 256
+zig-out\bin\wk.exe image uffs -i payload/data -o pack/data.uffs -g 4096 -p 2048 -s pack/partition_file_list.h
+zig-out\bin\wk.exe image fwenc --key fw.key --infile app.bin --outfile app.enc
+zig-out\bin\wk.exe image extract pack/firmware.img -o extracted
 powershell -ExecutionPolicy Bypass -File tools\build-zig-sdk.ps1
 zig-out\bin\wk.exe fs install -s payload/data -d output/rootfs -o output
 zig-out\bin\wk.exe image pbp -i bootloader.bin -o bootloader.pbp -k pnk.bin

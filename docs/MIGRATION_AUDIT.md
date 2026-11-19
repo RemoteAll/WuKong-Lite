@@ -46,7 +46,7 @@
 | 16 | `makelittlefs.py` | `src/tools/littlefs.zig`、`wk image littlefs` | ✅ | 复用上游 littlefs 2.5；`mklittlefs -l/-u` 验证内容一致（2026-11-18） |
 | 17 | `makeuffs.py` | `src/tools/uffs.zig`、`wk image uffs` | ✅ | **策略：SDK 怎么用我们就怎么用**——SDK 内无 UFFS 核心源码，参照 `makeuffs.py` 同样调用厂商 `mkuffs`：`-t <partblkcnt> -p <page> -b <blockpages> -s <oob> -x auto -o 0 -f <out> -d <in>`；分区大小按 `partition_file_list.h` 匹配、`partblkcnt = partsize/(page*blockpages)` 与参考一致。对拍 `check_uffs.py`：16 MiB 分区产物 **17,301,504 B 逐字节一致**（2026-11-19） |
 | 18 | `merge_files.py` | `src/tools/merge.zig`、`wk image merge` | ✅ | 按序拼接字节一致（2026-11-17） |
-| 19 | `mk_image.py` | `preproc.zig` / `pack.zig` / `aicboot.zig` / `partcheck.zig` 等 | 🟡 | `-p` 预处理器 7 类段（privres/itb/uboot_env/aicimage/concatenate/bin + 显式错误 2 类）已实现并对拍；`-d/-c/-k/-o/-v` 已对齐。**缺口**：`-b/--burner`（额外产出 `burner/*.bin` 与分区表 bin）、`-i/--imgfile`（从已打包镜像解出组件目录）。`-e/--extract` 参考自身 `sys.exit(1)`（未实现），`-s/--sign` 参考脚本内**未被消费** |
+| 19 | `mk_image.py` | `preproc.zig` / `pack.zig` / `aicboot.zig` / `partcheck.zig` 等 | 🟡 | `-p` 预处理器 7 类段（privres/itb/uboot_env/aicimage/concatenate/bin + 显式错误 2 类）已实现并对拍；`-d/-c/-k/-o/-v` 已对齐。`-i/--imgfile` 已实现：`wk image extract <img> [-o dir]`（按 `img_gen_fwc_meta()` 权威布局解包 + `.tar` 解包，对拍 `check_fwextract.py` 6 个文件全一致）。**仍缺**：`-b/--burner`（额外产出 `burner/*.bin` 与分区表 bin）。`-e/--extract` 参考自身 `sys.exit(1)`（未实现），`-s/--sign` 参考脚本内**未被消费** |
 | 20 | `mk_prebootprog.py` | `src/tools/preboot.zig` + `des.zig`、`wk image pbp` | ✅ | 明文与 PNK 加密 PBP 均逐字节一致（512 B，DIFF=0；2026-11-18） |
 | 21 | `mkcpio.py` | `src/tools/cpio.zig`、`wk image cpio`、`wk image ota` | ✅ | 512B env + crc cpio + size 回填；`cpio.exe -it` 可列出（2026-11-17） |
 | 22 | `oneclick.sh` + `onestep/*.bat`（19 个） | — | 🔴 | 构建编排（调用 SCons / 切换 defconfig / 汇总产物），同第 1 项前置依赖 |

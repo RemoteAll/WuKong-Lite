@@ -150,6 +150,12 @@ FAT12 项：entry0 = 0xFF8、entry1 = 0xFFF；FAT16：0xFFF8 / 0xFFFF
 - **烧写包**：`wk image flashpack [--payload-dir payload] [--out-dir flash]`；
   payload 放真实厂商 `bootloader.aic` / OS 文件；输出 AIC.FW + manifest + FLASH.md
   + `flash-upgcmd.ps1`（直烧）/ `flash-aiburn.ps1`（9100 server）。
+- **AIC.FW 解包**：`wk image extract <img> [-o dir]`（等价 `mk_image.py -i/--imgfile`）；
+  默认解到 `dirname(img)/<stem>`，`.tar` 组件自动展开。
+  **注意**：参考 `extract_img_data()` 按 `partition[64]` 读、其打包端写 `partition[32]`，
+  参考自身对真实镜像必崩；我们按打包端权威布局实现。
+- **UFFS / 固件加密**：`wk image uffs` / `wk image fwenc`（调 SDK 自带 `mkuffs.exe` /
+  `firmware_security_encrypt.exe`，参数与参考脚本完全一致；`--tooldir` 指目录）。
 - **官方烧写工具**：`tools/fetch-upgcmd-deps.ps1` 补齐 upgcmd 的 3 个 DLL，
   产物在 `wk/image/tools/upgcmd`；用法见 `docs/FLASHING.md`。
 - **官方文档**：`docs/official/`（迁移 `doc/skills/aiburn` 与第三方许可证）。
