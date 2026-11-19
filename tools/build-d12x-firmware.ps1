@@ -181,8 +181,8 @@ try {
     Write-Host "SHA256: $hash"
     Write-Host ""
     Write-Host "烧写（UART，需先跑 tools\fetch-upgcmd-deps.ps1 补齐 DLL）:"
-    Write-Host "  wk\image\tools\upgcmd\upgcmd.exe -i `"$($img.FullName)`" -u COM5 -b 921600 -p -v"
-    Write-Host "  （3M 在部分 USB 转串口/线材上协商不上，实际会退到 115200，反而更慢且易超时）"
+    Write-Host "  wk\image\tools\upgcmd\upgcmd.exe -i `"$($img.FullName)`" -u COM5 -b 3000000 -p -v"
+    Write-Host "  （-v 会打印握手/每个组件的进度与错误码；烧写失败时优先用它抓日志）"
 } finally {
     Pop-Location
 }

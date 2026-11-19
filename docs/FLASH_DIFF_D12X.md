@@ -29,21 +29,14 @@
 
 ### 3.1 `uartupg-psram-init.aic`（BROM 阶段初始化 PSRAM）
 
-我方少了两种 PSRAM 型号的配置条目（在二进制里按型号 ID 计数）：
+两边都是 `SECT_PSRAM(0x41490006)` + 同名 cfg 表结构（`pbp_cfg.json` 里 **10 个 cfg**，我方
+`pbp_cfg.bin` = 1,808 B 已含全部 10 项）；**体积差 1,536 B 属 SDK 版本差异**，内嵌 `d12x.pbp`
+也不是同一份。
 
-| PSRAM 型号 | 对照固件出现次数 | 我方 |
-|-----------|-----------------|------|
-| APS3208K（D123BBV 用的就是它） | 13 | 13 ✓ |
-| W955D8MKY | 6 | 6 ✓ |
-| APS12816O | 5 | 5 ✓ |
-| APS25616O | 2 | 2 ✓ |
-| **W957D6NKR** | **3** | **0** ✗ |
-| **W956D8NKR** | **3** | **0** ✗ |
-| APS6408L | 3 | 2（少 1） |
-
-> D123BBV 的 mark_id 是 0x08 → `PSRAM_FUSE_APS3208K`（`bsp/artinchip/sys/d12x/ram_param.c`），
-> 这条我方是有的，所以**单看型号表不足以解释失败**；但两者内嵌的 `d12x.pbp`（PreBootProgram 二进制）
-> 整体不是同一份（我方在对照 aic 里找不到自己的 pbp 字节串），说明**版本不同**。
+> ⚠️ **已撤回的错误结论**：早前按“型号 ID 在二进制里的出现次数”判定“我方缺 W957D6NKR / W956D8NKR”，
+> 那是**搜索口径弄错**——`pbp_cfg.json` 里 `getid.id` 用的是读 CR 得到的值（如 `0x000a000a`、`0x00020002`），
+> 与 `ram_param.c` 里 `PSRAM_FUSE_*` 的芯片 ID（如 `0x0c860c86`）不是同一套值，两者不能直接比对。
+> 对 D123BBV（mark_id 0x08 → APS3208K）我方配置是齐的。
 
 ### 3.2 `bootloader.aic`（spl）
 
@@ -69,20 +62,86 @@
 
 **推荐测试顺序**：`MIX-both` → 若成功，再用 `MIX-psram` / `MIX-boot` 确定具体是哪一件。
 
-## 5. 烧写注意（与镜像无关，但影响成功率）
+## 5. 烧写参数（**3M 可用**，实测结论）
 
-1. **波特率别用 3M**。截图显示选 3M、实测只有 10.7 KB/s ≈ 115200 的吞吐，说明升速没成功。
-   命令行烧写请显式指定，并保留完整日志：
+> ⚠️ **已撤回的错误判断**：早前根据“3M 下实测 10.7 KB/s”推测链路降到了 115200，建议改 921600。
+> 用户实测反馈：**能升级成功的那份固件就是用 3M 烧的** —— 所以 3M 本身没问题，该推断不成立。
+> 10.7 KB/s 更可能是“擦除 / 等待应答”阶段的瞬时值，不代表链路降速。
 
-   ```
-   wk\image\tools\upgcmd\upgcmd.exe -u COM25 -b 921600 -p -v image "<img 文件>"
-   ```
+仍建议用命令行烧写，因为**日志信息量大得多**（AiBurn 只显示“执行失败”）：
 
-   `-v` 会打印握手、每个组件的进度与错误码，比 AiBurn 的"执行失败"信息量大得多。
-2. 勾选 **"烧写成功后重启设备"**；若仍失败，再试 **"全片擦除"**（对照固件能成功，说明链路本身没问题）。
-3. 烧写前可先自检镜像：`upgcmd.exe -i <img>` 应列出 9 个 FWC 且 platform=d12x。
+```
+wk\image\tools\upgcmd\upgcmd.exe -u COM25 -b 3000000 -p -v image "<img 文件>"
+```
 
-## 6. 附录：对照固件的组件清单（`upgcmd -i`）
+`-v` 会打印握手、每个组件的进度与错误码，能直接指出是“擦除失败”“写入失败”还是“执行超时”。
+
+其它：
+1. 勾选 **“烧写成功后重启设备”**；若仍失败再试 **“全片擦除”**。
+2. 烧写前可先自检镜像：`upgcmd.exe -i <img>` 应列出 9 个 FWC 且 platform=d12x。
+
+## 6. 与 C 参考 SDK 的构建对比（用户要求：是否完全按 C 版迁移）
+
+### 6.1 源码级：实质一致
+
+逐文件比对 `G:\Code\C\luban-lite`（33,382 文件）与 `build\luban-lite`（32,294 文件）：
+
+| 项 | 数量 | 说明 |
+|----|------|------|
+| 内容不同 | **1** | `application/rt-thread/helloworld/main.c` —— 仅文件头多一个 UTF-8 BOM（撤销 Zig 注入时写入），**无实质差异** |
+| 仅副本有 | 6 | `.config.old` / `.defconfig` / `partition_table.h` / `rtconfig.py` / `d12x_bootloader_gcc.ld` / `.Kconfig.prj` —— 全是构建中间产物 |
+| 仅参考有 | 1,100 | 其中 **1,087 个是 `doc/`**，其余为 README/.gitignore/win_env.bat 等，**不参与编译** |
+
+### 6.2 产物级：**bootloader 与官方预编译交付物逐字节相同**
+
+```
+我们构建的  output\d12x_demo68-nor_baremetal_bootloader\images\d13x.bin   223,664 B
+SDK 官方    target\d12x\demo68-nor\pack\bootloader.bin                     223,664 B
+SHA256 均为 0B3557B8…
+→ 逐字节相同
+```
+
+`pack/bootloader.bin` 是厂商随 SDK 交付的预编译 bootloader，我们用自己的工具链从源码编出来与它**完全一致**，
+说明构建参数、优化级别、链接布局都没有偏差。
+
+### 6.3 但我们的构建流程确实有“绕过”，根因在这里
+
+官方 `SConstruct` 第 68-71 行：
+
+```python
+chip_path = os.path.join(AIC_ROOT, 'bsp/artinchip/sys/' + PRJ_CHIP)
+sys.path.append(chip_path)
+import rtconfig
+```
+
+**官方直接从 `bsp/artinchip/sys/<chip>/rtconfig.py` 导入，工作区根目录不需要 `rtconfig.py`。**
+而这个文件里的 `SOC` 决定产物名：`TARGET = PRJ_OUT_DIR + rtconfig.SOC + '.' + TARGET_EXT`。
+
+我们当初为了让 GCC 14 通过（SDK 默认假定 V2.6.1 工具链，其 `ISA_TAG=''` 不带 `zifencei`，
+而 GCC 14 生成的代码含 `fence.i` 必须声明该扩展），把 **d13x 的 `rtconfig.py` 复制到工作区根**并硬编码 `_zifencei`。
+后果：
+
+1. Python 的 import 优先命中根目录副本 → `SOC='d13x'` → **d12x 方案产出 `d13x.elf`**；
+2. 于是我们的构建脚本又加了“把 `d13x.elf` 复制成 `d12x.elf`”的补丁（`image_cfg` 的 `elf2itb` 段要 `d12x.elf`）。
+
+**正确的做法**（已查证）：不要动工作区根，改为给 `bsp/artinchip/sys/d12x/rtconfig.py` 打同一条 zifencei 补丁。
+另外该文件在 `e906fdp/e907fdp`（双精度）分支**漏了 `TOOLCHAIN_LIB` 赋值**（d13x 版有），
+直接用它构建会报 `can't link single-float modules with double-float modules` —— 这也是当初绕去用 d13x 版本的原因。
+
+> 工具链 `toolchain/lib/gcc/riscv64-unknown-elf/14.1.1/` 下只有 `rv32imafc/ilp32f`、
+> `rv32imafdc_xtheade/ilp32d`、`rv64imafdc_zfh_xtheadc/lp64d` 三份 multilib，**没有 `rv32imafdc_zifencei_xtheade`**。
+> 所以正确配法是：`-march` 带 `_zifencei`，multilib 路径用不带 zifencei 的 `rv32imafdc_xtheade`（ABI 相同）。
+
+**但这属于“流程洁癖”，与烧写失败无关** —— 6.2 已证明产物就是官方那一份。
+
+### 6.4 结论
+
+- 我们的固件 = **官方当前 SDK 的标准产物**（bootloader 二进制逐字节可证）；
+- 你能升级成功的那份是**更老 SDK 版本**的产物（loader 216,136 B vs 223,664 B）；
+- 所以“做到和它完全一模一样”不成立 —— 除非改用同一版本的 SDK；
+- 想立刻能用：烧 `..._MIX-both.img`（引导用那份能跑的、app 用我们的）。
+
+## 7. 附录：对照固件的组件清单（`upgcmd -i`）
 
 ```
 image.updater.psram   size 0x8D10  RAM 0x30043000  required;run
