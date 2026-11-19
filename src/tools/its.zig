@@ -139,9 +139,16 @@ fn propString(node: *const Node, name: []const u8) ?[]const u8 {
     return std.mem.trimEnd(u8, p.data, "\u{0}");
 }
 
+/// 解析签名 `algo` 里的哈希档（等价参考 `_sign._parse_algo`：无逗号时哈希默认 sha256）。
+fn signHashOf(algo: []const u8) !rsa.Hash {
+    const comma = std.mem.findScalar(u8, algo, ',');
+    const hash_name = if (comma) |i| std.mem.trim(u8, algo[0..i], " ") else "sha256";
+    return rsa.hashByName(hash_name) orelse error.UnsupportedAlgo;
+}
+
 /// 给 `images/*/signature-*` 节点写签名（等价 `itbimage._sign.sign_images`）。
 ///
-/// - 支持 `algo = "sha256,rsa2048"`（其它哈希/算法报 `UnsupportedAlgo`）；
+/// - 哈希档：`sha1` / `sha256` / `sha384` / `sha512`（由 algo 逗号前半段决定，缺省 sha256）；
 /// - 私钥取 `{keydir}/{key-name-hint}.key`（PEM 或 DER）；
 /// - 写入 `value`（签名本身）、`signer-name`/`signer-version`（带结尾 NUL 的字符串）、`timestamp`。
 pub fn signImages(
@@ -165,8 +172,7 @@ pub fn signImages(
             const algo = propString(sub, "algo") orelse continue;
             const hint = propString(sub, "key-name-hint") orelse continue;
 
-            // 只支持 sha256 + rsa
-            if (!std.mem.startsWith(u8, algo, "sha256")) return error.UnsupportedAlgo;
+            const hash_kind = try signHashOf(algo);
 
             const key_path = try std.fmt.allocPrint(allocator, "{s}/{s}.key", .{
                 std.mem.trimEnd(u8, keydir, "/\\"), hint,
@@ -178,7 +184,7 @@ pub fn signImages(
 
             var key = try rsa.parsePrivate(allocator, key_bytes);
             defer key.deinit(allocator);
-            const sig = try rsa.signSha256(allocator, &key, data);
+            const sig = try rsa.signHashed(allocator, &key, hash_kind, data);
             defer allocator.free(sig);
 
             try setBytesProp(sub, a, "value", sig);
@@ -459,7 +465,7 @@ pub fn signConfigurations(
             if (!std.mem.startsWith(u8, sig_node.name, "signature")) continue;
             const algo = propString(sig_node, "algo") orelse continue;
             const hint = propString(sig_node, "key-name-hint") orelse continue;
-            if (!std.mem.startsWith(u8, algo, "sha256")) return error.UnsupportedAlgo;
+            const hash_kind = try signHashOf(algo);
 
             const paths = try collectConfigPaths(a, self.root, conf, sig_node);
 
@@ -478,8 +484,9 @@ pub fn signConfigurations(
                 if (r.off + r.size > dtb.len) return error.BadRegion;
                 try buf.appendSlice(allocator, dtb[r.off..][0..r.size]);
             }
-            var digest: [32]u8 = undefined;
-            std.crypto.hash.sha2.Sha256.hash(buf.items, &digest, .{});
+            // 区域哈希用 algo 里的哈希档（参考 `_sign_one_configuration` 用 `hashlib.new(hash_name)`）
+            const digest = try digestFor(allocator, @tagName(hash_kind), buf.items);
+            defer allocator.free(digest);
 
             const key_path = try std.fmt.allocPrint(allocator, "{s}/{s}.key", .{
                 std.mem.trimEnd(u8, keydir, "/\\"), hint,
@@ -491,7 +498,7 @@ pub fn signConfigurations(
 
             var key = try rsa.parsePrivate(allocator, key_bytes);
             defer key.deinit(allocator);
-            const sig = try rsa.signSha256(allocator, &key, &digest);
+            const sig = try rsa.signHashed(allocator, &key, hash_kind, digest);
             defer allocator.free(sig);
 
             try setBytesProp(sig_node, a, "value", sig);
@@ -1394,6 +1401,16 @@ fn digestFor(allocator: std.mem.Allocator, algo: []const u8, data: []const u8) !
     if (std.mem.eql(u8, algo, "sha256")) {
         const bytes = try allocator.alloc(u8, 32);
         std.crypto.hash.sha2.Sha256.hash(data, bytes[0..32], .{});
+        return bytes;
+    }
+    if (std.mem.eql(u8, algo, "sha384")) {
+        const bytes = try allocator.alloc(u8, 48);
+        std.crypto.hash.sha2.Sha384.hash(data, bytes[0..48], .{});
+        return bytes;
+    }
+    if (std.mem.eql(u8, algo, "sha512")) {
+        const bytes = try allocator.alloc(u8, 64);
+        std.crypto.hash.sha2.Sha512.hash(data, bytes[0..64], .{});
         return bytes;
     }
     return error.UnsupportedHashAlgo;

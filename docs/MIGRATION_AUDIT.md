@@ -1,129 +1,172 @@
 # 迁移全量审计（WuKong-Lite ↔ Luban-Lite）
 
-- 审计日期：2026-11-18
+- 审计日期：**2026-11-19（第二轮全量审计）**；上一轮：2026-11-18
 - 参考实现：`G:\Code\C\luban-lite`（Luban-Lite SDK，官方仓库 `artinchip/luban-lite`）
-- 被审计仓库：`G:\Code\Zig\WuKong-Lite`
-- 结论：**主机侧“镜像格式 + 打包/校验工具链”基本覆盖；设备侧（bootloader/RTOS/HAL）
-  与部分主机工具（uffs/PBP/SPIENC/OTA）尚未迁移。**
+- 被审计仓库：`G:\Code\Zig\WuKong-Lite`（`wk` CLI）
+- 审计方法（实测，不靠印象）：
+  1. 枚举参考全部主机侧脚本（`tools/scripts/**` 与 `target/**/pack/*.sh`）；
+  2. 逐个提取参考 CLI 选项（`add_argument`）与关键能力分支（`mk_image.py` 的 pre-process 段类型）；
+  3. 与 `wk` 的选项定义逐项对照（`src/main.zig` 的 `getOpt/hasFlag`）；
+  4. 对算法/格式枚举逐项核对（FIT 哈希档、cipher 算法、simg、FAT、LittleFS、AIC 头…）；
+  5. 每个“已迁移”结论都必须有对拍脚本或实测数字支撑。
+- 复现命令见文末第 9 节。
 
 ## 1. 总览
 
 | 层 | 官方规模 | 已迁移 | 状态 |
 |----|----------|--------|------|
-| 镜像格式/打包脚本（`tools/scripts`） | 47 个脚本/工具 | ~10 个等价实现（另有 5 个部分实现） | 🟡 核心链路可用 |
-| 板级驱动（`bsp/artinchip/drv`） | 42 类 | 2 类模拟（uart0/gpio0） | 🔴 仅占位 |
-| 运行形态（`application`） | baremetal / rt-thread / freertos / ucos-ii | 仅 OSAL/设备框架模拟 | 🔴 无 RTOS 内核 |
-| 厂商包（`packages/artinchip`） | 19 个 | 0 | 🔴 |
-| 第三方包（`packages/third-party`） | 44 个 | 0（仅实现若干格式） | 🔴 |
-| 板级方案（`target`） | d12x/d13x/d21x 多板 | 1 个 Kconfig 方案（demo88-nor 风格） | 🟡 |
-| 官方文档（`doc`） | topics 464 篇 + webhelp/images | 仅 `skills/aiburn` + 3 篇自写说明 | 🟡 |
-| 烧写主机端 | `upgcmd`（预编译）+ AiBurn GUI | upgcmd 可运行 + 脚本编排 | 🟡 无源码 |
+| `tools/scripts` 主机脚本 | **29 个**业务脚本（另有 `Cryptodome`/`asn1crypto`/`gmssl`/`fdt` 等 vendored 库不计） | 22 个等价实现（含 3 个部分） | 🟡 镜像/打包链路完整 |
+| 设备侧驱动（`bsp/artinchip/drv`） | 42 类 | 2 类模拟（uart0/gpio0） | 🔴 仅占位 |
+| 运行形态（`application`） | baremetal / rt-thread / freertos / ucos-ii | OSAL/设备框架模拟 | 🔴 无 RTOS 内核 |
+| 厂商包（`packages/artinchip`） | 19 | 0 | 🔴 |
+| 第三方包（`packages/third-party`） | 44 | 0（仅实现若干格式） | 🔴 |
+| 板级方案（`target`） | d12x/d13x/d21x 多板 | 1 个 Kconfig 方案 | 🟡 |
+| 官方文档（`doc`） | topics 464 篇 + webhelp/images | `skills/aiburn` + 3 篇自写 | 🟡 |
+| 烧写主机端 | `upgcmd`（预编译）+ AiBurn | 帧/请求/会话层自实现 + 脚本编排 | 🟡 无厂商源码 |
 
-## 2. 已迁移并有验证（✅）
+## 2. `tools/scripts` 逐脚本对照（29 项，闭环、无遗漏）
 
-| 官方 | 我们的实现 | 验证 |
-|------|------------|------|
-| `mk_image.py`（AIC.FW 打包） | `src/tools/pack.zig` | 组件/CRC/顺序；`upgcmd -e` 可解析 |
-| `mkenvimage` | `src/bsp/common/env_image.zig` | 与参考 SHA256 一致 |
-| `gen_partition_table.py` | `src/tools/partition_table.zig` | 内容一致（忽略 CRLF） |
-| `mkimage`（FIT/ITS） | `src/tools/fdt.zig`、`itb.zig`、`its.zig`、`fdt_reader.zig` | 逻辑树一致；hash 校验通过 |
-| `elf2image`（段提取/ITS） | `src/tools/elf2aic.zig` | 段哈希一致 |
-| `img2simg` | `src/tools/sparse.zig` | 11 组样本 + FAT 镜像逐字节一致 |
-| `simg_dump.py` | `wk image simg --dump` | 头部/chunk 表文本 + 单测（2026-11-17） |
-| `cpio -H crc` | `src/tools/cpio.zig` | 参考 cpio 可解包；结构一致 |
-| `makefatfs.py` | `src/tools/fat.zig` | FAT12/16/32、LFN、`--auto`、`--fullpart`；`mcopy` 回读通过（2026-11-17） |
-| `mkcpio.py`（OTA） | `src/tools/ota.zig`、`wk image ota` | 512B env + crc cpio + size 回填；`cpio.exe -it` 可列出（2026-11-17） |
-| `merge_files.py` | `src/tools/merge.zig`、`wk image merge` | 按序拼接，字节实测通过（2026-11-17） |
-| `calc_linked_addr.py` | `src/tools/linkaddr.zig`、`wk image linkaddr` | MEM_AUTO/显式 TEXT_BASE + 4 占位符替换；实测通过（2026-11-17） |
-| `linked_size.py` | `src/tools/linksize.zig`、`wk image linksize` | summary/detail/dironly CSV；hello_uart.map 与参考 summary 一致（2026-11-17） |
-| `gen_partition_file_list.py` | `src/tools/partlist.zig`、`wk image partlist` | D13x 配置输出 6 项与参考完全一致（2026-11-18） |
-| `partition_check.py` | `src/tools/partcheck.zig`、`wk image partcheck` | 50%/125% 样本表格与 `--strict` 退出码同参考；jffs2/UBI 规则已覆盖（2026-11-18） |
-| `makelittlefs.py` | `src/tools/littlefs.zig`、`wk image littlefs` | 复用上游 littlefs 2.5；`mklittlefs -l/-u` 验证多文件/嵌套内容一致（2026-11-18） |
-| `fsinstall.py` | `src/tools/fsinstall.zig`、`wk fs install/clean` | 递归安装/单文件安装/清理；内容 SHA256 一致（2026-11-18） |
-| `mk_prebootprog.py` | `src/tools/preboot.zig`、`src/tools/des.zig`、`wk image pbp` | 明文与 PNK 加密 PBP 均与参考逐字节一致（512 B，DIFF=0；2026-11-18） |
-| `mk_private_resource.py` | `src/tools/privres.zig`、`wk image privres` | `pbp_cfg.json` 1712 B、`pbp_security.json` 52 B 均与参考逐字节一致（2026-11-18） |
-| `encrypt_rsa_key.py` | `src/tools/rsa_key.zig`、`wk image rsakey` | 私钥 AES/DES 加密 + 公钥 PKCS#1/SPKI 四种组合与参考脚本**逐字节一致**（2026-11-18） |
-| `sdk_update.py` | `src/tools/sdk_update.zig`、`wk sdk-update` | 同一 pinmux.c 样本，忽略行尾后与参考脚本输出逐行一致；已修复文件幂等（2026-11-18） |
-| `panic_parse.py` | `src/tools/panic.zig`、`wk panic` | 同一 panic 日志 + `d13x.elf`，与参考脚本输出**逐行一致**（寄存器/栈回溯/地址定位；2026-11-18） |
-| `rtt2freertos.py` | `src/tools/rtt2freertos.zig`、`wk rtt2freertos` | 28 个官方 `*_rt-thread_*_defconfig` 全部转换，与参考脚本输出**逐字节一致**（忽略 Windows CRLF；2026-11-18） |
-| `aicupg_client.py`（帧层） | `src/tools/upg_frame.zig`、`wk upg frame|decode` | 7 组命令/payload 编码与参考客户端**逐字节一致**；4 组 CRC、5 类损坏帧拒绝行为一致（2026-11-18） |
-| `aicupg_client.py`（请求层） | `src/tools/upg_payload.zig`、`wk upg <请求子命令>` | 15 组请求（task_id / config-device UART+USB / burn 两种 / send-cmd / get-log / upload-start / task-id 覆盖）帧字节与参考一致（2026-11-18） |
-| `upgcmd server`（TCP 会话） | `src/tools/upg_client.zig`、`wk upg … --send` | 对 Python mock server 实跑：4 类请求帧字节一致且响应解析正确；错响应命令字与连接拒绝均非零退出（2026-11-18） |
-| `openssl`（AES/RSA 子集） | `crypt.zig`、`rsa.zig` | AES 双向逐字节；RSA 与 openssl 互通 |
-| `upgcmd`（使用侧） | `tools/fetch-upgcmd-deps.ps1`、`flash-*.ps1` | `-e` 解析本仓库 AIC.FW |
-| Kconfig/defconfig/codegen | `kconfig.zig`、`codegen.zig`、`modules.zig` | 单测覆盖 |
-| AIBURN 文档/客户端 | `docs/official/skills/aiburn/` | 可运行（需 server） |
+| # | 参考脚本 | 我们的等价实现 | 状态 | 证据 / 缺口 |
+|---|----------|----------------|------|-------------|
+| 1 | `aic_build.py`（97 KB，构建主脚本） | `kconfig.zig` + `codegen.zig` + `modules.zig`（`wk defconfig/config/build`） | 🟡 | Kconfig→`.config`→`config.zig`/编译计划已通；**缺口**：SCons 全量构建编排、链接脚本与工具链选择、POST_ACTION 流水线 |
+| 2 | `mk_private_resource.py` + `aic_private_resource/` | `src/tools/privres.zig`、`wk image privres` | ✅ | `pbp_cfg.json` 1712 B、`pbp_security.json` 52 B 逐字节一致（2026-11-18） |
+| 3 | `build_mini_bootloader.py` | — | 🔴 | 本质是 SCons 子构建编排（保存/恢复 `.config`/`.defconfig`/`rtconfig.h`/`cconfig.h`，跑 `scons --apply-def` + 编译，拷 `bootloader.bin`）。**前置依赖**：先有 SCons 驱动（第 1 项） |
+| 4 | `calc_linked_addr.py` | `src/tools/linkaddr.zig`、`wk image linkaddr` | ✅ | MEM_AUTO / 显式 TEXT_BASE + 4 占位符替换实测一致（2026-11-17） |
+| 5 | `config_update.py` | — | ⚪ | **不迁移**：`pexpect` 驱动 `scons --menuconfig` 的交互式 TUI 自动化，不产出任何镜像/格式；无 TUI 需求 |
+| 6 | `elf_parse.py` | `src/tools/elf2aic.zig` 内部 | ✅ | ELF32/64 段解析，`wk image elf2aic` / `elf2its` 使用 |
+| 7 | `elf2image/` | `src/tools/elf2aic.zig`、`wk image elf2aic` | ✅ | 段哈希/头部与参考一致 |
+| 8 | `encrypt_rsa_key.py` | `src/tools/rsa_key.zig`、`wk image rsakey` | ✅ | AES/DES 私钥加密 + PKCS#1/SPKI 公钥四种组合逐字节一致；输出命名同为 `_encrypted.der`/`_encrypted_pkcs1.der`/`_pubkey_pkcs1.der`（2026-11-18） |
+| 9 | `fdt/`（DTS/DTB 库） | `src/tools/fdt.zig`、`fdt_reader.zig`、`its.zig` | ✅ | 解析/序列化、FIT 构建与 dump；2026-11-19 修正字符串块对齐与属性顺序后与参考**逐字节一致** |
+| 10 | `fsinstall.py` | `src/tools/fsinstall.zig`、`wk fs install/clean` | ✅ | 递归/单文件安装与清理，内容 SHA256 一致（2026-11-18） |
+| 11 | `gen_partition_file_list.py` | `src/tools/partlist.zig`、`wk image partlist` | ✅ | D13x 输出 6 项与参考完全一致（2026-11-18） |
+| 12 | `gen_partition_table.py` | `src/tools/partition_table.zig`、`wk image part` | ✅ | 内容一致（忽略 CRLF）；`--json` 同参考 |
+| 13 | `itbimage/`（FIT 构建/签名/加密/导出） | `its.zig` + `itb.zig` + `fdt.zig`、`wk image itb/fitinfo` | ✅ | 图像签名 / 图像加密 / 配置签名 / 公钥注入 / `-E` 外部数据全部与参考逐字节一致：`check_fitsign.py`、`check_fitcipher.py`、`check_fitconfsign.py`、`check_fitsign_algos.py`（2026-11-19） |
+| 14 | `linked_size.py` | `src/tools/linksize.zig`、`wk image linksize` | ✅ | `.summary.csv` / `.detail.csv` 命名与内容一致（另有 `.dironly.csv` 增强；2026-11-17） |
+| 15 | `makefatfs.py` | `src/tools/fat.zig`、`wk image fat` | 🟡 | FAT12/16/32 + LFN + AICF 扩展块，`mcopy` 回读通过；`-a/-f/-i/-o/-g/-s/-c/-v` 已对齐；`-r/--raw` 语义等价（我们从不裁剪）；`-t/--tooldir` 不需要（自实现）。**待验证**：`-b/--reserved`（NFTL 预留块，2026-11-19 实现，按参考 `51*64*2048` / `(n+1)*64*2048` 计算）尚未与参考对拍 |
+| 16 | `makelittlefs.py` | `src/tools/littlefs.zig`、`wk image littlefs` | ✅ | 复用上游 littlefs 2.5；`mklittlefs -l/-u` 验证内容一致（2026-11-18） |
+| 17 | `makeuffs.py` | — | 🔴 受阻 | UFFS 核心（树/页状态/ECC）源码不在 SDK（只有 `mkuffs.exe` 与 `drv/spinand/uffs.c` 移植层），无依据不猜 |
+| 18 | `merge_files.py` | `src/tools/merge.zig`、`wk image merge` | ✅ | 按序拼接字节一致（2026-11-17） |
+| 19 | `mk_image.py` | `preproc.zig` / `pack.zig` / `aicboot.zig` / `partcheck.zig` 等 | 🟡 | `-p` 预处理器 7 类段（privres/itb/uboot_env/aicimage/concatenate/bin + 显式错误 2 类）已实现并对拍；`-d/-c/-k/-o/-v` 已对齐。**缺口**：`-b/--burner`（额外产出 `burner/*.bin` 与分区表 bin）、`-i/--imgfile`（从已打包镜像解出组件目录）。`-e/--extract` 参考自身 `sys.exit(1)`（未实现），`-s/--sign` 参考脚本内**未被消费** |
+| 20 | `mk_prebootprog.py` | `src/tools/preboot.zig` + `des.zig`、`wk image pbp` | ✅ | 明文与 PNK 加密 PBP 均逐字节一致（512 B，DIFF=0；2026-11-18） |
+| 21 | `mkcpio.py` | `src/tools/cpio.zig`、`wk image cpio`、`wk image ota` | ✅ | 512B env + crc cpio + size 回填；`cpio.exe -it` 可列出（2026-11-17） |
+| 22 | `oneclick.sh` + `onestep/*.bat`（19 个） | — | 🔴 | 构建编排（调用 SCons / 切换 defconfig / 汇总产物），同第 1 项前置依赖 |
+| 23 | `panic_parse.py` | `src/tools/panic.zig`、`wk panic` | ✅ | 同一日志 + `d13x.elf` 输出逐行一致；本轮补 `-v/--verbose`（2026-11-19） |
+| 24 | `partition_check.py` | `src/tools/partcheck.zig`、`wk image partcheck` | ✅ | 50%/125% 样本与 `--strict` 退出码同参考（2026-11-18） |
+| 25 | `release_patch.py` | — | 🔴 | repo 工作流工具（manifest XML + `git format-patch` + 路径/主题重写）。**可迁移**：Zig 子进程 + 小型 XML 解析；需本地 git 仓库夹具做对拍 |
+| 26 | `rtt2freertos.py` | `src/tools/rtt2freertos.zig`、`wk rtt2freertos` | 🟡 | 28 个官方 defconfig 转换逐字节一致；`-o/-n/--console-uart/--sysname` 已对齐；**缺口**：`--sdk-root`（自动向上搜索可替代）、`--verify`（依赖 kconfiglib 校验，可用本项目 Kconfig 解析实现） |
+| 27 | `sdk_update.py` | `src/tools/sdk_update.zig`、`wk sdk-update` | ✅ | pinmux 修复逐行一致、幂等（2026-11-18） |
+| 28 | `simg_dump.py` | `src/tools/sparse.zig`、`wk image simg --dump` | ✅ | 头部/chunk 表文本 + 单测（2026-11-17） |
+| 29 | `upgcmd`（预编译二进制）+ `doc/skills/aiburn/scripts/aiburn/aicupg_client.py` | `upg_frame.zig` / `upg_payload.zig` / `upg_client.zig`、`wk upg *` | 🟡 | 帧层 7 组、请求层 15 组、TCP 会话均已与参考逐字节一致；**缺口**：`upgcmd` 服务端与 USB 通道（厂商二进制，无源码） |
 
-## 3. 部分迁移（🟡，有明确缺口）
+## 3. CLI 选项级差异（本轮逐项核对）
 
-| 官方 | 已做 | 缺口 |
-|------|------|------|
-| `mkimage` 签名/加密 | `src/tools/aicboot.zig` + `wk image aicimage`：AIC 头 v2 的 `sign_algo`/`enc_algo`/iv 区间联动、RSA-2048 与 HMAC-SHA256 签名、AES-128-CBC（含 SSK 派生密钥）、MD5+校验和；6 组与 `mk_image.py -p` **逐字节一致**（2026-11-19）。`itb` 外部数据（`-E`）+ 0x800 块对齐也已对齐（`its.buildFdtExternal`）；FIT **图像签名**（`images/*/signature-*`）、**图像加密**（`cipher-*`，aes128/192/256 + aes-128-ctr + chacha20）、**配置签名**（`_fdt_regions` 区域哈希 + `hashed-nodes`/`hashed-strings`）、**公钥注入**（`-K`，`rsa,n0-inverse`）全部完成，签名值/密文/注入后 DTB 与参考**逐字节一致**（`check_fitsign` / `check_fitcipher` / `check_fitconfsign`，2026-11-19） | 只支持 `sha256` 哈希档（参考还支持 sha1/384/512，选用时我们显式报 `UnsupportedAlgo`）。参考实现是 SDK 的纯 Python `itbimage`（`_sign.py`/`_cipher.py`/`_fdt_regions.py`），`mkimage.exe` 本身不支持 |
-| `aic_build.py` | Kconfig→build_plan→codegen | SCons 全量构建、链接脚本/工具链选择、镜像后处理流水线 |
-| 官方文档 | aiburn 技能 | `topics/` 464 篇、`images/`、`webhelp/` 未迁（体积原因，可按需） |
-| 板级方案 | 1 个 Kconfig 方案 | d12x/d21x/多板 `target` 与 `pack/image_cfg.json` |
+| 参考 | 参考选项 | 我们 | 差异处置 |
+|------|----------|------|----------|
+| `makefatfs.py` | `-a -f -i -o -g -s -c -v -r -b -t` | `--auto --fullpart --input-dir --output --size --sector --cluster --label --raw --reserved` | `-t` 不需要（自实现）；`-r` 接受（默认即不裁剪）；`-b` 本轮实现（NFTL） |
+| `makelittlefs.py` | `-i -o -p -b -t -g -r` | `-i -o -p -b -s/-size -r` | `-t` 不需要；其余等价 |
+| `makeuffs.py` | `-i -o -g -p -s -t` | — | 🔴 受阻（见第 2 节第 17 项） |
+| `mk_image.py` | `-d -i -o -c -k -e -s -b -p -v` | `preproc: -c -d -k --timestamp`；`pack: -c -d -o --sdk-output --compare` | `-e/-s` 参考未实现/未消费；`-b/-i/-v` 见第 2 节第 19 项 |
+| `rtt2freertos.py` | `-o -n --console-uart --sysname --sdk-root --verify` | `-o -n --dry-run --console-uart --sysname` | 其余 2 项已登记（第 2 节第 26 项） |
+| `panic_parse.py` | `-c -e -l -v` | `-c -e -l -v`（另有 `--addr2line`） | ✅ 本轮补齐 `-v` |
+| `linked_size.py` | `-m` | `-m/--map`（另有 `--out-dir`） | ✅ 输出命名一致 |
+| `encrypt_rsa_key.py` | `-d -a -r` | `-d/--des-key -a/--aes-key -r/--rsa -o` | ✅ |
+| `mk_prebootprog.py` | `-m -k -i -o` | `-m/--magic -k/--pnk -i -o` | ✅ |
+| `calc_linked_addr.py` | `-i -c -o` | 同名 | ✅ |
+| `gen_partition_table.py` | `-c -o -j` | `--config --out --json` | ✅ |
+| `gen_partition_file_list.py` | `-c -o` | `--config --output` | ✅ |
+| `fsinstall.py` | `-o -c -s -d` | `fs install -s -d [-o]` / `fs clean -c [-o]` | ✅ |
+| `merge_files.py` | `-i`(多个) `-o` | `--input`(可重复) `--output` | ✅ |
+| `partition_check.py` | `-c -d -t --strict -v` | `-c -d -t --strict` | 🟡 `-v`（verbose）未做（不影响判定与退出码） |
+| `release_patch.py` | `-t -p -o -n -l -v` | — | 🔴 见第 2 节第 25 项 |
+| `build_mini_bootloader.py` | `--root --base --mini-def --scons` | — | 🔴 见第 2 节第 3 项 |
 
-## 4. 未迁移（🔴）
+## 4. 算法 / 格式枚举对照
 
-### P0：影响“自己独立上板”
-- **bootloader/PBP**：`application/baremetal/bootloader`、`spienc/spienctool`、
-  `d13x.pbp/pbp_cfg.bin` 资源打包；
-- **RTOS 内核**：`application/rt-thread`、`freertos`、`ucos-ii`；`kernel/` 适配；
-- **HAL/驱动**：41 类 `bsp/artinchip/drv`（显示/存储/网络/音频/USB/安全等）；
-- **烧写协议**：主机端 `upgcmd` 源码（内部 `aicupg`）、USB/UART 协议实现。
+| 域 | 参考支持 | 我们支持 | 状态 |
+|----|----------|----------|------|
+| `hash-*` 节点 | `crc32/md5/sha1/sha256/sha384/sha512`（`_hash._ALGOS`） | 全 6 种 | ✅ 2026-11-19 补齐 384/512 |
+| 签名哈希档 | `sha1/sha256/sha384/sha512`（`_sign._parse_algo`） | 全 4 种（PKCS#1 v1.5 DigestInfo 前缀各自实现） | ✅ 2026-11-19 补齐，`check_fitsign_algos.py` 4/4 逐字节一致 |
+| 图像加密 `cipher-*` | `aes128/aes192/aes256`(CBC+PKCS7)、`aes-128-ctr`、`chacha20` | 全 5 种（AES-192 自实现，FIPS-197 向量守门） | ✅ `check_fitcipher.py` 5/5 一致 |
+| 配置签名 | 区域哈希 + `hashed-nodes`/`hashed-strings` | 同（`findRegions` 字节级移植） | ✅ `check_fitconfsign.py` |
+| 公钥注入 `-K` | `algo/rsa,num-bits/rsa,modulus/rsa,exponent/rsa,n0-inverse[/required]` | 同（`rsa,n0-inverse` 用 mod 2^32 牛顿迭代） | ✅ 注入后整份 DTB 字节相同 |
+| AIC 启动镜像 v2 | 头 256 B + loader + 资源链；RSA-2048/HMAC-SHA256、AES-128-CBC、MD5+校验和 | 同 | ✅ 6 组组合逐字节一致（`check_aicimage.py`） |
+| Sparse 镜像 | `img2simg`（chunk：raw/fill/dontcare/crc32） | 同 + `--dump`/`--unsparse` | ✅ 11 组样本 + FAT 镜像一致 |
+| FAT | FAT12/16/32（按簇数自动选择）、LFN、AICF 扩展块 | 同 + `--fat32` 强制 | ✅ `mcopy` 回读通过 |
+| LittleFS | 2.5（`mklittlefs`） | 同（直接内嵌上游 C 源） | ✅ 内容一致 |
+| CPIO | `crc`/`newc` | 同 | ✅ `cpio.exe -it` 可列出 |
+| 分区表 | `gen_partition_table`（C 头 + JSON）、`gen_partition_file_list`（10 列 CSV） | 同 | ✅ 内容一致 |
+| PBP / 私有资源 | `mk_prebootprog`（DES/PNK）、`mk_private_resource` | 同 | ✅ 逐字节一致 |
+| UFFS | `makeuffs` + `mkuffs.exe` | — | 🔴 源码不在 SDK |
 
-### P1：镜像与安全能力
-- 文件系统镜像：`makeuffs.py`（uffs）—— **受阻**：本 SDK 只带 `mkuffs.exe` 外壳与
-  `drv/spinand/uffs.c` 移植层，UFFS 核心（树/页状态/ECC）源码不在仓库内，无依据不可猜实现；
-- 固件加密：`firmware_security_encrypt`（含 nonce/tweak）—— **受阻**：预编译 exe，SDK 无源码。
-  实测特征：只取密钥文件前 16 B（AES-128）、输入需 16 B 对齐且不填充、改动一块明文会影响其后所有块
-  （前向链式）、已排除 ECB/CBC/CTR(XOR 流)；其余待上游公开后对齐。
-  `encrypt_rsa_key.py` 已完成（见 ✅ 表）；SPIENC/eFuse 安全启动仍保留官方工具；
-- `mkimage` 的 RSA/SM2 签名节点、公钥内嵌、`-K` 更新 dtb（参考实现是 SDK 自带的纯 Python `itbimage`）；
-- 镜像辅助脚本：`config_update.py`（交互式 menuconfig，无 TUI 需求）、`release_patch.py`、
-  `build_mini_bootloader.py`。
-  （`sdk_update.py` → `wk sdk-update`、`panic_parse.py` → `wk panic`、
-  `rtt2freertos.py` → `wk rtt2freertos` 已完成，见 ✅ 表）
+## 5. 已迁移并有验证（✅）摘要
 
-### P2：中间件/生态
-- `packages/artinchip`：ota、xip_ramcode、zipfs、uds、barcode、lvgl-ui、mpp、
-  aic-startup-ui、pinmux-check、thread_stack_trace、profiler 等；
-- **GUI 支持范围**：官方仅集成 LVGL（`application/Kconfig` 的 `LPKG_USING_LVGL`
-  可选 V8/V9，`packages/artinchip/lvgl-ui` 提供 LVGL 与 demo）；未发现 AWTK/emWin/
-  Qt/GuiLite 等其它 GUI 包。显示/MPP 驱动与 GUI 解耦，第三方 GUI 需自行移植；
-  WuKong-Lite 侧 GUI/显示仍属设备侧未迁移部分。
-- `packages/third-party`：lwIP、mbedTLS、littlefs、cherryusb、sqlite、LVGL、
-  MicroPython、蓝牙/WiFi、音视频编解码等；
-- 官方文档全量离线站（topics/images/webhelp）。
+完整证据链见第 2 节的“证据”列。核心一句话：**凡标 ✅ 的项，都有对拍脚本或实测数字**，
+一键回归 `tools/regression.ps1` 会跑全部脚本（当前 **PASS=63 / FAIL=0 / SKIP=0**，8 个对拍脚本）。
 
-### P3：主机便利工具
-- `crc32/xxd/sed/cat/truncate` 等 exe（功能已被 Zig 实现覆盖，不需要二进制迁移）；
-- `mtools`（mformat/mcopy）——已验证可用参考二进制，未重写。
+## 6. 部分迁移（🟡）与下一步
 
-## 5. 与“能不能烧写/跑起来”的关系
+| 项 | 剩余缺口 | 实现路径 | 验证门槛 |
+|----|----------|----------|----------|
+| `aic_build.py` / `onestep/*.bat` | SCons 全量构建编排 | 用 `wk build` 产出的计划驱动 `scons`；或在 Zig 内实现构建图 | 同一 defconfig 产出的 `.elf/.bin` 与参考构建一致（哈希） |
+| `build_mini_bootloader.py` | mini 变体子构建 | 依赖上一条；其余是文件保存/恢复与拷贝逻辑 | mini 构建产物 `bootloader.bin` 与参考一致 |
+| `mk_image.py -b/--burner` | burner 格式（`burner/*.bin` + 分区表 bin） | 参考 3514-3540 行：按媒体拆分为 `.bin` 并写分区表 | 同一 image_cfg 下 `burner/` 目录逐文件一致 |
+| `mk_image.py -i/--imgfile` | 从已打包镜像解出组件目录 | 解析 AIC.FW 容器（我们已有解析能力）→ 还原 `data/` 目录 | 解包后目录与原始 `data/` 逐文件一致 |
+| `makefatfs.py -b/--reserved`（NFTL） | 已实现，未对拍 | 构造 `partition.json`（nftl 含该镜像）+ `partition_file_list.h` | 与参考 `makefatfs.py -f` 产出的镜像大小/内容一致 |
+| `rtt2freertos.py --verify` | Kconfig 校验 | 复用本项目 `kconfig.zig` | 与参考在若干 defconfig 上的校验结论一致 |
+| `partition_check.py -v` | verbose 输出 | 追加统计行 | 仅输出差异，不影响退出码 |
+| `upgcmd` 服务端/USB | 无源码 | 按开源 `lib/aicupg` 协议实现 | 与 `upgcmd.exe` 服务端互通 |
 
-- **能做的**：用官方 bootloader/OS → `wk image flashpack` → `flash-upgcmd.ps1`
-  烧写；或用 `upgcmd write/exec` 直接跑本仓库的 Zig 裸机 `hello_uart`。
-- **不能独立做的**：没有 bootloader/PBP 与 RTOS/HAL，WuKong-Lite 无法单独产出
-  “可启动的完整固件”；这不是格式问题，是设备侧代码缺失。
+## 7. 未迁移（🔴）与受阻说明
+
+### P0 设备侧（影响“自己独立上板”）
+- **bootloader/PBP**：`application/baremetal/bootloader`、`spienc/spienctool`、`d13x.pbp/pbp_cfg.bin`；
+- **RTOS 内核**：`application/rt-thread`、`freertos`、`ucos-ii` 与 `kernel/` 适配；
+- **HAL/驱动**：41 类 `bsp/artinchip/drv`（显示/存储/网络/音频/USB/安全…）；
+- **烧写协议**：主机端 `upgcmd` 源码（内部 `aicupg`）与 USB/UART 协议。
+
+### P1 镜像与安全能力
+- **UFFS**（`makeuffs.py`）—— 受阻：无核心源码，不可猜实现；
+- **固件加密** `firmware_security_encrypt`（nonce/tweak）—— 受阻：预编译 exe，SDK 无源码；
+  实测：只取密钥前 16 B、输入需 16 B 对齐且不填充、改动一块明文影响其后所有块（前向链式），
+  已排除 ECB/CBC/CTR(XOR 流)；
+- **SPIENC / eFuse 安全启动** —— 保留官方工具。
+
+### P2 中间件 / 生态
+- `packages/artinchip`（19 个）、`packages/third-party`（44 个）；
+- 官方文档全量离线站（topics 464 篇 + images + webhelp）；
+- 板级方案：d12x/d21x 多板 `target` 与 `pack/image_cfg.json`。
+
+### P3 主机便利工具
+- `release_patch.py`（repo 工作流）：可迁移，见第 2 节第 25 项；
+- `crc32/xxd/sed/cat/truncate` 等 exe：功能已被 Zig 覆盖；
+- `mtools`（mformat/mcopy）：保持使用官方二进制做验证。
+
+## 8. 与“能不能烧写/跑起来”的关系
+
+- **能做的**：官方 bootloader/OS → `wk image flashpack` → `flash-upgcmd.ps1` 烧写；
+  或 `upgcmd write/exec` 直接跑本仓库 Zig 裸机 `hello_uart`。
+- **不能独立做的**：没有 bootloader/PBP 与 RTOS/HAL，无法单独产出“可启动完整固件”。
 - **建议优先级**：
-  1. （如可获取）接入厂商 `aicupg` 主机源码，替换预编译 upgcmd；
-  2. 按开源设备端 `lib/aicupg` 实现 UART 主机客户端（无 DLL 依赖）；
-  3. 补 uffs 与 SPIENC/PBP 镜像类型；
-  4. 按板卡逐步补 HAL（先 UART/GPIO/时钟，再存储/显示）。
+  1. P1 收尾：`release_patch.py`、`mk_image -b/-i`、fat NFTL 对拍、`rtt2freertos --verify`；
+  2. 构建链：SCons 编排（解锁 `aic_build`/`onestep`/`mini bootloader`）；
+  3. 设备侧：按板卡补 HAL（UART/GPIO/时钟 → 存储 → 显示）；
+  4. 烧写：实现开源 `lib/aicupg` 主机客户端（去掉厂商 DLL 依赖）。
 
-## 6. 审计复现命令
+## 9. 审计复现命令
 
 ```powershell
-# 参考规模
-(Get-ChildItem G:\Code\C\luban-lite\tools\scripts -File).Count
+# 参考规模（本轮实测）
+(Get-ChildItem G:\Code\C\luban-lite\tools\scripts -File -Recurse -Include *.py).Count      # 含 vendored 库
+Get-ChildItem G:\Code\C\luban-lite\tools\scripts -File | Measure-Object                   # 顶层脚本
 (Get-ChildItem G:\Code\C\luban-lite\bsp\artinchip\drv -Directory).Count
 (Get-ChildItem G:\Code\C\luban-lite\packages\artinchip -Directory).Count
 (Get-ChildItem G:\Code\C\luban-lite\packages\third-party -Directory).Count
 (Get-ChildItem G:\Code\C\luban-lite\doc\topics -Recurse -File -Filter *.html).Count
 
 # 我方能力
-Get-ChildItem src -Recurse -File -Filter *.zig | Measure-Object
 .\zig-out\bin\wk.exe
 zig build test
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\regression.ps1
 ```
+
+> 审计原则：**没有实测证据的不写成 ✅**；受阻项必须写清“为什么受阻”与“解锁条件”。

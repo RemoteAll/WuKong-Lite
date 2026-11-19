@@ -192,6 +192,7 @@ fn cmdPanic(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
 
     const log = try readText(io, aa, log_path);
     defer aa.free(log);
+    const verbose = hasFlag(args, "--verbose") or hasFlag(args, "-v");
     const elf: ?[]u8 = if (elf_path) |p| try readBytes(io, aa, p) else null;
     defer if (elf) |e| aa.free(e);
 
@@ -238,6 +239,11 @@ fn cmdPanic(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         .riscv => "RISC-V",
         .csky => "CSKY",
     }});
+    if (verbose) {
+        try out.print("[verbose] log={d} B, elf={s}, registers={d}, frames={d}\n", .{
+            log.len, elf_path orelse "(none)", report.regs.len, report.frames.len,
+        });
+    }
     if (addr2line != null) try out.writeAll("Toolchain: riscv64-unknown-elf\n");
     if (elf != null) {
         try out.print(
@@ -1432,9 +1438,35 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         const output = getOpt(rest, "--output") orelse getOpt(rest, "-o") orelse return error.MissingArgument;
         const auto = hasFlag(rest, "--auto");
         const fullpart = hasFlag(rest, "--fullpart");
+        // 参考 `-r/--raw` 表示「不把镜像裁剪到内容大小」。我们本来就按给定大小/分区大小
+        // 分配，从不裁剪，因此该开关等价于默认行为；此处接受以兼容既有构建脚本。
+        const _raw = hasFlag(rest, "--raw") or hasFlag(rest, "-r");
+        _ = _raw;
+        // 参考 `makefatfs.py` 的 NFTL 预留块：仅当该镜像属于 nftl 分区时生效。
+        const reserved_blocks: ?u64 = if (getOpt(rest, "--reserved") orelse getOpt(rest, "-b")) |v|
+            (std.fmt.parseInt(u64, v, 0) catch return error.InvalidArgument)
+        else
+            null;
+        const is_nftl = partitionIsNftl(io, aa, output) catch false;
+        const nftl_reserved: u64 = if (is_nftl) blk: {
+            const blocks: u64 = if (reserved_blocks) |n| (if (n > 50) n + 1 else 51) else 51;
+            break :blk blocks * 64 * 2048;
+        } else 0;
+
         const size_text = getOpt(rest, "--size") orelse (if (auto or fullpart) "0" else return error.MissingArgument);
         var total_bytes = aic.utils.sizeStrToInt(size_text) catch return error.InvalidArgument;
-        if (fullpart) total_bytes = @intCast(try partitionSizeForImage(io, aa, output));
+        if (fullpart or (auto and is_nftl)) {
+            const part_size = try partitionSizeForImage(io, aa, output);
+            if (is_nftl) {
+                if (part_size <= nftl_reserved) {
+                    try out.print("FAT: 分区 {d} B 不大于 NFTL 预留 {d} B（{s}）\n", .{ part_size, nftl_reserved, output });
+                    return error.PartitionTooSmall;
+                }
+                total_bytes = part_size - nftl_reserved;
+            } else {
+                total_bytes = part_size;
+            }
+        }
         const sector: u16 = if (getOpt(rest, "--sector")) |v| @intCast(std.fmt.parseInt(usize, v, 0) catch return error.InvalidArgument) else 512;
         const cluster: u8 = if (getOpt(rest, "--cluster")) |v| @intCast(std.fmt.parseInt(usize, v, 0) catch return error.InvalidArgument) else 8;
 
@@ -1454,7 +1486,8 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         };
 
         if (auto) {
-            builder.opts.total_bytes = try builder.autoTotalBytes();
+            // auto + NFTL：参考以「分区大小 - 预留」为最终尺寸（autoTotalBytes 的结果不参与）
+            if (!(is_nftl)) builder.opts.total_bytes = try builder.autoTotalBytes();
         }
         const img = try builder.build();
         defer aa.free(img);
@@ -2272,6 +2305,30 @@ fn joinOutPath(
         return std.fs.path.join(allocator, &.{ d, name });
     }
     return std.fmt.allocPrint(allocator, "{s}{s}", .{ stem_path, suffix });
+}
+
+/// 该镜像是否属于 NFTL 分区（等价 `makefatfs.check_is_nftl_part`：查同目录
+/// `partition.json` 的 `partitions.nftl` 是否包含 `<镜像名去扩展名>:`）。
+fn partitionIsNftl(io: std.Io, allocator: std.mem.Allocator, output: []const u8) !bool {
+    const dir = std.fs.path.dirname(output) orelse ".";
+    const json_path = try std.fs.path.join(allocator, &.{ dir, "partition.json" });
+    defer allocator.free(json_path);
+    const text = readText(io, allocator, json_path) catch return false;
+    defer allocator.free(text);
+
+    const key_at = std.mem.find(u8, text, "\"nftl\"") orelse return false;
+    var i = key_at + "\"nftl\"".len;
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t' or text[i] == ':')) i += 1;
+    if (i >= text.len or text[i] != '"') return false;
+    const start = i + 1;
+    const end = std.mem.findScalarPos(u8, text, start, '"') orelse return false;
+    const nftl_value = text[start..end];
+
+    const base = std.fs.path.basename(output);
+    const stem = if (std.mem.findScalar(u8, base, '.')) |dot| base[0..dot] else base;
+    const needle = try std.fmt.allocPrint(allocator, "{s}:", .{stem});
+    defer allocator.free(needle);
+    return std.mem.find(u8, nftl_value, needle) != null;
 }
 
 fn partitionSizeForImage(io: std.Io, allocator: std.mem.Allocator, output: []const u8) !u64 {

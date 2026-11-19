@@ -1,9 +1,9 @@
-﻿//! RSA PKCS#1 v1.5（SHA-256）签名/验签 —— 对应参考工程
-//! `mk_image.py` 里 PyCryptodome `PKCS1_v1_5` 的签名流程与 U-Boot
+﻿//! RSA PKCS#1 v1.5 签名/验签 —— 对应参考工程
+//! `mk_image.py` 里 PyCryptodome `pkcs1_15` 的签名流程与 U-Boot
 //! `bootm` 的 RSA 校验。
 //!
 //! 边界：
-//!   * 只支持 PKCS#1 v1.5 + SHA-256（参考里 rsa2048/rsa3072 常用组合）；
+//!   * 哈希档位：`sha1` / `sha256` / `sha384` / `sha512`（与参考 `_sign._parse_algo` 一致）；
 //!   * 私钥支持 `RSA PRIVATE KEY`(PKCS#1) 与 `PRIVATE KEY`(PKCS#8)；
 //!   * 公钥支持 `PUBLIC KEY`(SPKI) 与 `RSA PUBLIC KEY`(PKCS#1)；
 //!   * 不支持加密私钥、PSS、SM2。
@@ -331,36 +331,86 @@ pub fn parsePublicPem(allocator: std.mem.Allocator, pem: []const u8) !PublicKey 
 // ---------------------------------------------------------------------------
 // PKCS#1 v1.5
 // ---------------------------------------------------------------------------
-const sha256_digest_info = [_]u8{
-    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20,
-};
+/// 签名/验签支持的哈希档位（与参考 `itbimage._sign._parse_algo` 对齐）。
+pub const Hash = enum { sha1, sha256, sha384, sha512 };
 
-fn buildEmSha256(allocator: std.mem.Allocator, data: []const u8, k: usize) ![]u8 {
-    if (k < sha256_digest_info.len + 32 + 11) return Error.BadKeySize;
+pub fn hashByName(name: []const u8) ?Hash {
+    if (std.mem.eql(u8, name, "sha1")) return .sha1;
+    if (std.mem.eql(u8, name, "sha256")) return .sha256;
+    if (std.mem.eql(u8, name, "sha384")) return .sha384;
+    if (std.mem.eql(u8, name, "sha512")) return .sha512;
+    return null;
+}
+
+pub fn digestLength(h: Hash) usize {
+    return switch (h) {
+        .sha1 => 20,
+        .sha256 => 32,
+        .sha384 => 48,
+        .sha512 => 64,
+    };
+}
+
+/// DER 编码的 DigestInfo 前缀（不含摘要本身）。
+fn digestInfoPrefix(h: Hash) []const u8 {
+    const sha1_prefix = [_]u8{
+        0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14,
+    };
+    const sha256_prefix = [_]u8{
+        0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20,
+    };
+    const sha384_prefix = [_]u8{
+        0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0x04, 0x30,
+    };
+    const sha512_prefix = [_]u8{
+        0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40,
+    };
+    return switch (h) {
+        .sha1 => &sha1_prefix,
+        .sha256 => &sha256_prefix,
+        .sha384 => &sha384_prefix,
+        .sha512 => &sha512_prefix,
+    };
+}
+
+fn hashInto(h: Hash, data: []const u8, out: []u8) void {
+    switch (h) {
+        .sha1 => std.crypto.hash.Sha1.hash(data, out[0..20], .{}),
+        .sha256 => std.crypto.hash.sha2.Sha256.hash(data, out[0..32], .{}),
+        .sha384 => std.crypto.hash.sha2.Sha384.hash(data, out[0..48], .{}),
+        .sha512 => std.crypto.hash.sha2.Sha512.hash(data, out[0..64], .{}),
+    }
+}
+
+/// 构造 EMSA-PKCS1-v1_5 编码（`0x00 || 0x01 || 0xFF… || 0x00 || DigestInfo`）。
+fn buildEm(allocator: std.mem.Allocator, h: Hash, data: []const u8, k: usize) ![]u8 {
+    const prefix = digestInfoPrefix(h);
+    const dlen = digestLength(h);
+    if (k < prefix.len + dlen + 11) return Error.BadKeySize;
+
     const em = try allocator.alloc(u8, k);
-    var digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(data, &digest, .{});
-
     em[0] = 0x00;
     em[1] = 0x01;
-    @memset(em[2 .. k - sha256_digest_info.len - 32 - 1], 0xFF);
-    em[k - sha256_digest_info.len - 32 - 1] = 0x00;
-    @memcpy(em[k - sha256_digest_info.len - 32 ..][0..sha256_digest_info.len], &sha256_digest_info);
-    @memcpy(em[k - 32 ..], &digest);
+    const sep = k - prefix.len - dlen - 1;
+    @memset(em[2..sep], 0xFF);
+    em[sep] = 0x00;
+    @memcpy(em[sep + 1 ..][0..prefix.len], prefix);
+    hashInto(h, data, em[k - dlen ..]);
     return em;
 }
 
-/// 生成 PKCS#1 v1.5 SHA-256 签名（返回 k 字节）。
-pub fn signSha256(
+/// 生成 PKCS#1 v1.5 签名（返回 k 字节）。
+pub fn signHashed(
     allocator: std.mem.Allocator,
     key: *const PrivateKey,
+    h: Hash,
     data: []const u8,
 ) ![]u8 {
     const n = key.n;
     var ni: usize = 0;
     while (ni < n.len and n[ni] == 0) ni += 1;
     const k = n.len - ni;
-    const em = try buildEmSha256(allocator, data, k);
+    const em = try buildEm(allocator, h, data, k);
     defer allocator.free(em);
 
     const sig = try allocator.alloc(u8, k);
@@ -369,10 +419,11 @@ pub fn signSha256(
     return sig;
 }
 
-/// 校验 PKCS#1 v1.5 SHA-256 签名。
-pub fn verifySha256(
+/// 校验 PKCS#1 v1.5 签名。
+pub fn verifyHashed(
     allocator: std.mem.Allocator,
     key: *const PublicKey,
+    h: Hash,
     data: []const u8,
     signature: []const u8,
 ) !bool {
@@ -381,13 +432,32 @@ pub fn verifySha256(
     const k = key.n.len - ni;
     if (signature.len != k) return false;
 
-    const em = try buildEmSha256(allocator, data, k);
+    const em = try buildEm(allocator, h, data, k);
     defer allocator.free(em);
 
     const out = try allocator.alloc(u8, k);
     defer allocator.free(out);
     try modexpFixed(allocator, signature, key.e, key.n, out);
     return std.mem.eql(u8, em, out);
+}
+
+/// 生成 PKCS#1 v1.5 SHA-256 签名（兼容旧接口）。
+pub fn signSha256(
+    allocator: std.mem.Allocator,
+    key: *const PrivateKey,
+    data: []const u8,
+) ![]u8 {
+    return signHashed(allocator, key, .sha256, data);
+}
+
+/// 校验 PKCS#1 v1.5 SHA-256 签名（兼容旧接口）。
+pub fn verifySha256(
+    allocator: std.mem.Allocator,
+    key: *const PublicKey,
+    data: []const u8,
+    signature: []const u8,
+) !bool {
+    return verifyHashed(allocator, key, .sha256, data, signature);
 }
 
 // ---------------------------------------------------------------------------
@@ -430,6 +500,38 @@ test "RSA PKCS#1 v1.5 SHA-256 与 openssl 向量一致" {
     defer pub_key.deinit(allocator);
     try std.testing.expect(try verifySha256(allocator, &pub_key, test_data, sig));
     try std.testing.expect(!try verifySha256(allocator, &pub_key, "tampered", sig));
+}
+
+test "RSA PKCS#1 v1.5 多档哈希：512 位密钥下 sha1/sha256 可用、384/512 明确报 BadKeySize" {
+    const allocator = std.testing.allocator;
+
+    var priv = try parsePrivatePem(allocator, test_priv_pem);
+    defer priv.deinit(allocator);
+    var pub_key = try parsePublicPem(allocator, test_pub_pem);
+    defer pub_key.deinit(allocator);
+
+    // 512 位模数（64 B）：sha1(15+20+11=46) 与 sha256(19+32+11=62) 放得下
+    for ([_]Hash{ .sha1, .sha256 }) |h| {
+        const sig = try signHashed(allocator, &priv, h, test_data);
+        defer allocator.free(sig);
+        try std.testing.expect(try verifyHashed(allocator, &pub_key, h, test_data, sig));
+        try std.testing.expect(!try verifyHashed(allocator, &pub_key, h, "tampered", sig));
+        // 换档必须失败（DigestInfo 前缀不同）
+        for ([_]Hash{ .sha1, .sha256 }) |other| {
+            if (other == h) continue;
+            try std.testing.expect(!try verifyHashed(allocator, &pub_key, other, test_data, sig));
+        }
+    }
+
+    // sha384/sha512 需要更大模数（19+48+11=78 / 19+64+11=94 字节），此处应显式报错而不是静默降级
+    try std.testing.expectError(Error.BadKeySize, signHashed(allocator, &priv, .sha384, test_data));
+    try std.testing.expectError(Error.BadKeySize, signHashed(allocator, &priv, .sha512, test_data));
+
+    // 摘要长度与档位一致
+    try std.testing.expectEqual(@as(usize, 20), digestLength(.sha1));
+    try std.testing.expectEqual(@as(usize, 32), digestLength(.sha256));
+    try std.testing.expectEqual(@as(usize, 48), digestLength(.sha384));
+    try std.testing.expectEqual(@as(usize, 64), digestLength(.sha512));
 }
 
 test "RSA DER 私钥（PKCS#1 / PKCS#8）与 PEM 等价" {
