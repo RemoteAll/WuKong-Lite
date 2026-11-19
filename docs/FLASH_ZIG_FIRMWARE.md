@@ -14,7 +14,7 @@ Get-FileHash artifacts\lvgl-firmware\d13x_demo88-nor_zig_v1.0.0.img -Algorithm S
 # 应为 EC8329B7BE44A4A78A8110542CF911EF5B3188C3A840EA3359507B4748FD0168
 
 # upgcmd 解析镜像（必须用绝对路径；相对路径会报 Invalid arguments）
-.\wk\image\tools\upgcmd\upgcmd.exe -e G:\Code\Zig\WuKong-Lite\artifacts\lvgl-firmware\d13x_demo88-nor_zig_v1.0.0.img
+.\tools\upgcmd\upgcmd.exe -e G:\Code\Zig\WuKong-Lite\artifacts\lvgl-firmware\d13x_demo88-nor_zig_v1.0.0.img
 ```
 
 应列出 9 个组件：
@@ -35,10 +35,10 @@ image.target.os / image.target.rodata / image.target.data
 
 ```powershell
 cd G:\Code\Zig\WuKong-Lite
-.\wk\image\tools\upgcmd\upgcmd.exe -l
+.\tools\upgcmd\upgcmd.exe -l
 # 记下输出里的 bus:port，例如 1:5
 
-.\wk\image\tools\upgcmd\upgcmd.exe -i artifacts\lvgl-firmware\d13x_demo88-nor_zig_v1.0.0.img -d 1:5 -p -v
+.\tools\upgcmd\upgcmd.exe -i artifacts\lvgl-firmware\d13x_demo88-nor_zig_v1.0.0.img -d 1:5 -p -v
 ```
 
 把 `1:5` 换成 `-l` 实际显示的 `bus:port`。
@@ -50,7 +50,7 @@ cd G:\Code\Zig\WuKong-Lite
 3. 执行：
 
 ```powershell
-.\wk\image\tools\upgcmd\upgcmd.exe -i artifacts\lvgl-firmware\d13x_demo88-nor_zig_v1.0.0.img -u COM5 -p -v
+.\tools\upgcmd\upgcmd.exe -i artifacts\lvgl-firmware\d13x_demo88-nor_zig_v1.0.0.img -u COM5 -p -v
 ```
 
 把 `COM5` 换成实际串口。不要在命令里写 `-b`，让工具自动协商波特率。

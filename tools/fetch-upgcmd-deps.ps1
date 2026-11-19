@@ -11,7 +11,7 @@
 #   powershell -ExecutionPolicy Bypass -File tools\fetch-upgcmd-deps.ps1 -SdkRoot G:\Code\C\luban-lite
 #
 # 依赖：Windows + 7-Zip（C:\Program Files\7-Zip\7z.exe 或 PATH 中的 7z）。
-# 产物默认在 wk\image\tools\upgcmd（已被 .gitignore 忽略，不会入库）。
+# 产物默认在 tools\upgcmd（已被 .gitignore 忽略，不会入库）。
 
 param(
     [string]$SdkRoot = "",
@@ -23,7 +23,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 if ([string]::IsNullOrWhiteSpace($OutDir)) {
-    $OutDir = Join-Path $PSScriptRoot "..\wk\image\tools\upgcmd"
+    $OutDir = Join-Path $PSScriptRoot "..\tools\upgcmd"
 }
 if ([string]::IsNullOrWhiteSpace($TempDir)) {
     $TempDir = Join-Path $env:TEMP "wukong-upgcmd-deps"

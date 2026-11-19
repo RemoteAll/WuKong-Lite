@@ -120,9 +120,9 @@ python -m SCons -j8 -Q 2>&1 | Tee-Object -FilePath artifacts\build-last.log
 
 ```powershell
 cd G:\Code\Zig\WuKong-Lite
-.\wk\image\tools\upgcmd\upgcmd.exe -l
+.\tools\upgcmd\upgcmd.exe -l
 # 记下 bus:portnum，例如 1:5
-.\wk\image\tools\upgcmd\upgcmd.exe -i artifacts\lvgl-firmware\d13x_demo88-nor_v1.0.0.img -d 1:5 -p -v
+.\tools\upgcmd\upgcmd.exe -i artifacts\lvgl-firmware\d13x_demo88-nor_v1.0.0.img -d 1:5 -p -v
 ```
 
 ### 方式 B：UART
@@ -132,7 +132,7 @@ cd G:\Code\Zig\WuKong-Lite
 3. 执行：
 
 ```powershell
-.\wk\image\tools\upgcmd\upgcmd.exe -i artifacts\lvgl-firmware\d13x_demo88-nor_v1.0.0.img -u COM5 -p -v
+.\tools\upgcmd\upgcmd.exe -i artifacts\lvgl-firmware\d13x_demo88-nor_v1.0.0.img -u COM5 -p -v
 ```
 
 烧录完成后断开 PA0/松开按键并重新上电；串口控制台默认 `uart0`，LVGL 应显示

@@ -180,8 +180,8 @@ try {
     Write-Host "大小: $($img.Length) B"
     Write-Host "SHA256: $hash"
     Write-Host ""
-    Write-Host "烧写（UART，需先跑 tools\fetch-upgcmd-deps.ps1 补齐 DLL）:"
-    Write-Host "  wk\image\tools\upgcmd\upgcmd.exe -i `"$($img.FullName)`" -u COM5 -b 3000000 -p -v"
+    Write-Host "烧写（UART，工具已随仓库提供，无需再拉 DLL）:"
+    Write-Host "  tools\upgcmd\upgcmd.exe -u COM5 -b 3000000 -p -v image `"$($img.FullName)`""
     Write-Host "  （-v 会打印握手/每个组件的进度与错误码；烧写失败时优先用它抓日志）"
 } finally {
     Pop-Location

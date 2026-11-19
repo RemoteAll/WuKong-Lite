@@ -16,7 +16,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Repo = Resolve-Path (Join-Path $PSScriptRoot "..")
-$UpgDir = Join-Path $Repo "wk\image\tools\upgcmd"
+$UpgDir = Join-Path $Repo "tools\upgcmd"
 $Stage = Join-Path $Repo "artifacts\upgcmd-toolkit"
 if (-not $Out) { $Out = Join-Path $Repo "artifacts\upgcmd-toolkit.zip" }
 

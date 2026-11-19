@@ -40,6 +40,6 @@
   （它是完整固件 SDK，OS 只是其中一层）。
 - `docs/FLASHING.md` 是面向 WuKong-Lite 的烧写说明（官方 upgcmd 直烧 + AIBURN 两种路径 + 本机实测结论）。
 - `tools/fetch-upgcmd-deps.ps1` 补齐 upgcmd 依赖（UsbDkHelper/libgcc/libwinpthread），
-  产物在 `wk/image/tools/upgcmd`（已 gitignore）。
+  产物在 `tools/upgcmd`（已 gitignore）。
 - `wk image flashpack` 默认调用 `docs/official/skills/aiburn/scripts/aiburn.py` 生成
   `flash-aiburn.ps1`，同时生成 `flash-upgcmd.ps1`（直烧，不需要 9100 server）。

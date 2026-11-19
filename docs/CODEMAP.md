@@ -166,7 +166,7 @@ FAT12 项：entry0 = 0xFF8、entry1 = 0xFFF；FAT16：0xFFF8 / 0xFFFF
 - **repo 补丁导出**：`wk release-patch -t <tag|sha> [-p a,b] [-o dir] [-n N] [--list]`
   （等价 `release_patch.py`；需在含 `.repo/manifest.xml` 的工作区根运行）。
 - **官方烧写工具**：`tools/fetch-upgcmd-deps.ps1` 补齐 upgcmd 的 3 个 DLL，
-  产物在 `wk/image/tools/upgcmd`；用法见 `docs/FLASHING.md`。
+  产物在 `tools/upgcmd`；用法见 `docs/FLASHING.md`。
 - **官方文档**：`docs/official/`（迁移 `doc/skills/aiburn` 与第三方许可证）。
 - **Zig 接入 Luban-Lite**：`docs/ZIG_ON_LUBAN_LITE.md` + `examples/zig_riscv/`
   （目标参数、与官方 Xuantie GCC 混链、SCons 接库方式）。

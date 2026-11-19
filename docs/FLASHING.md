@@ -36,7 +36,7 @@ Luban-Lite 的官方烧写文档在 `doc/skills/aiburn/`，已原样迁移到
 powershell -ExecutionPolicy Bypass -File tools\fetch-upgcmd-deps.ps1 -SdkRoot G:\Code\C\luban-lite
 ```
 
-脚本会下载并解包到 `wk\image\tools\upgcmd`（已 gitignore）：
+脚本会下载并解包到 `tools\upgcmd`（已 gitignore）：
 
 | DLL | 来源 | 作用 |
 |-----|------|------|

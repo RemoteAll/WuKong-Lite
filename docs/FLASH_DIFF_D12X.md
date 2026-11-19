@@ -71,7 +71,7 @@
 仍建议用命令行烧写，因为**日志信息量大得多**（AiBurn 只显示“执行失败”）：
 
 ```
-wk\image\tools\upgcmd\upgcmd.exe -u COM25 -b 3000000 -p -v image "<img 文件>"
+tools\upgcmd\upgcmd.exe -u COM25 -b 3000000 -p -v image "<img 文件>"
 ```
 
 `-v` 会打印握手、每个组件的进度与错误码，能直接指出是“擦除失败”“写入失败”还是“执行超时”。
