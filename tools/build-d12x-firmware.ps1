@@ -103,22 +103,46 @@ try {
         # -------------------------------------------------------- application
         Write-Host "[3/5] application: $appDef"
         Invoke-Tool "apply-def $appDef" @("-m", "SCons", "--apply-def=$appDef", "-Q")
-        Invoke-Tool "build application" @("-m", "SCons", "-j8", "-Q")
+        # SDK 缺陷：POST_ACTION 链接完就立刻跑 mk_image.py，而 image_cfg 写的是 `d12x.elf` /
+        # `d12x_os.its`，实际产物名是 `<soc>.elf`（本 SDK 实测为 d13x）→ 全新板型构建必定报
+        # `File d12x_os.its is not exist` 并以退出码 2 结束。只要 ELF 已产出就当成功：
+        # 名字对齐在第 [4/5] 步做，打包由第 [5/5] 步的 Zig 流水线完成。
+        $appBuildStart = Get-Date
+        try {
+            Invoke-Tool "build application" @("-m", "SCons", "-j8", "-Q")
+        } catch {
+            $freshElf = Get-ChildItem $imgDir -Filter "*.elf" -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTime -ge $appBuildStart.AddSeconds(-2) } |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if (-not $freshElf) { throw }
+            Write-Host "  [warn] SCons POST_ACTION 失败（SDK 的 d12x/d13x 命名不一致，已知缺陷）；"
+            Write-Host "         ELF 已产出（$($freshElf.Name), $($freshElf.Length) B），改用 Zig 流水线打包。"
+        }
     } else {
         Write-Host "[2/5][3/5] 跳过编译（-SkipBuild）"
     }
 
-    # ------------------------------------------------------------ ELF 名对齐
-    Write-Host "[4/5] 对齐 ELF 名（SDK 的 d12x 方案产物名与 image_cfg 期望不一致）..."
+    # ------------------------------------------------------------ 产物名对齐
+    Write-Host "[4/5] 对齐 SDK 产物名（d12x 方案的 `<soc>` 实际是 d13x）..."
     if (-not (Test-Path $imgDir)) { throw "找不到产物目录: $imgDir" }
-    $want = Join-Path $imgDir "$Chip.elf"
-    if (-not (Test-Path $want)) {
-        $other = Get-ChildItem $imgDir -Filter "*.elf" | Where-Object { $_.BaseName -ne $Chip } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        if (-not $other) { throw "产物目录里没有 ELF: $imgDir" }
-        Copy-Item $other.FullName $want -Force
-        Write-Host "  复制 $($other.Name) -> $Chip.elf"
-    } else {
-        Write-Host "  已存在 $Chip.elf"
+    # 1) ELF：image_cfg 的 `elf2itb` 段要 `<chip>.elf`。**每次都刷新** —— 只在缺失时复制会让
+    #    重新编译后的新 ELF 被旧副本挡住（拿到的是上一轮固件）。
+    $srcElf = Get-ChildItem $imgDir -Filter "*.elf" -ErrorAction SilentlyContinue |
+        Where-Object { $_.BaseName -ne $Chip } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($srcElf) {
+        Copy-Item $srcElf.FullName (Join-Path $imgDir "$Chip.elf") -Force
+        Write-Host "  $($srcElf.Name) -> $Chip.elf"
+    } elseif (-not (Test-Path (Join-Path $imgDir "$Chip.elf"))) {
+        throw "产物目录里没有 ELF: $imgDir"
+    }
+    # 2) ITS：image_cfg 的 `itb` 段（ELF→ELF 那条路走 elf2itb，不走这里）要 `<chip>_os.its`，
+    #    由 SDK 的 elf_parse.py（elf2image）生成，名字同样是 `<soc>_os.its`。
+    $itsName = "${Chip}_os.its"
+    $srcIts = Get-ChildItem $imgDir -Filter "*_os.its" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne $itsName } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($srcIts) {
+        Copy-Item $srcIts.FullName (Join-Path $imgDir $itsName) -Force
+        Write-Host "  $($srcIts.Name) -> $itsName"
     }
 
     # ------------------------------------------------------------ 打包 AIC.FW
@@ -157,7 +181,8 @@ try {
     Write-Host "SHA256: $hash"
     Write-Host ""
     Write-Host "烧写（UART，需先跑 tools\fetch-upgcmd-deps.ps1 补齐 DLL）:"
-    Write-Host "  wk\image\tools\upgcmd\upgcmd.exe -i `"$($img.FullName)`" -u COM5 -p -v"
+    Write-Host "  wk\image\tools\upgcmd\upgcmd.exe -i `"$($img.FullName)`" -u COM5 -b 921600 -p -v"
+    Write-Host "  （3M 在部分 USB 转串口/线材上协商不上，实际会退到 115200，反而更慢且易超时）"
 } finally {
     Pop-Location
 }
