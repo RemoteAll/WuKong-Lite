@@ -159,6 +159,8 @@ FAT12 项：entry0 = 0xFF8、entry1 = 0xFFF；FAT16：0xFFF8 / 0xFFFF
 - **量产烧写镜像**：`wk image burner -c <cfg> -d <datadir> -o <outdir>`（等价 `mk_image.py -b`）
   → `<outdir>/burner/*.bin`：整片 flash 镜像（0xFF 预填 + 组件按分区落位 + spi-nand 页表）
   与分区烧写表（每项 16 B）。spi-nand 按 `array_organization` 逐项出产物。
+- **repo 补丁导出**：`wk release-patch -t <tag|sha> [-p a,b] [-o dir] [-n N] [--list]`
+  （等价 `release_patch.py`；需在含 `.repo/manifest.xml` 的工作区根运行）。
 - **官方烧写工具**：`tools/fetch-upgcmd-deps.ps1` 补齐 upgcmd 的 3 个 DLL，
   产物在 `wk/image/tools/upgcmd`；用法见 `docs/FLASHING.md`。
 - **官方文档**：`docs/official/`（迁移 `doc/skills/aiburn` 与第三方许可证）。

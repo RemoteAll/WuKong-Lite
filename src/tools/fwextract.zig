@@ -267,7 +267,8 @@ test "fwextract.extractTar：常规文件 + 目录 + 路径穿越拒绝" {
     defer bad.deinit(allocator);
     try bad.appendSlice(allocator, &h_bad);
     try bad.appendSlice(allocator, "x");
-    try bad.appendSlice(allocator, pad[0..511]);    try std.testing.expectError(Error.UnsafePath, extractTar(allocator, io, bad.items, dir));
+    try bad.appendSlice(allocator, pad[0..511]);
+    try std.testing.expectError(Error.UnsafePath, extractTar(allocator, io, bad.items, dir));
 }
 
 test "fwextract.checkSafePath：绝对路径/盘符/.. 一律拒绝" {

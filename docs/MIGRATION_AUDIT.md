@@ -52,7 +52,7 @@
 | 22 | `oneclick.sh` + `onestep/*.bat`（19 个） | — | 🔴 | 构建编排（调用 SCons / 切换 defconfig / 汇总产物），同第 1 项前置依赖 |
 | 23 | `panic_parse.py` | `src/tools/panic.zig`、`wk panic` | ✅ | 同一日志 + `d13x.elf` 输出逐行一致；本轮补 `-v/--verbose`（2026-11-19） |
 | 24 | `partition_check.py` | `src/tools/partcheck.zig`、`wk image partcheck` | ✅ | 50%/125% 样本与 `--strict` 退出码同参考（2026-11-18） |
-| 25 | `release_patch.py` | — | 🔴 | repo 工作流工具（manifest XML + `git format-patch` + 路径/主题重写）。**可迁移**：Zig 子进程 + 小型 XML 解析；需本地 git 仓库夹具做对拍 |
+| 25 | `release_patch.py` | `src/tools/release_patch.zig`、`wk release-patch` | ✅ | manifest XML（含 `<include>`/`<linkfile>`）+ `git format-patch` + 逐行路径/主题重写；`-t/-p/-o/-n/-l/-v` 全对齐。对拍 `check_release_patch.py`：自建 repo 工作区（双 git 子仓库 + linkfile + 未匹配 ref 的子项目），tag（不含边界）/ 原始 SHA（含边界）/ `-n 1` / `-p 子集` 四种用法共 8 个 patch **逐字节一致**，`--list` 文本一致（2026-11-19） |
 | 26 | `rtt2freertos.py` | `src/tools/rtt2freertos.zig`、`wk rtt2freertos` | 🟡 | 28 个官方 defconfig 转换逐字节一致；`-o/-n/--console-uart/--sysname` 已对齐；**缺口**：`--sdk-root`（自动向上搜索可替代）、`--verify`（依赖 kconfiglib 校验，可用本项目 Kconfig 解析实现） |
 | 27 | `sdk_update.py` | `src/tools/sdk_update.zig`、`wk sdk-update` | ✅ | pinmux 修复逐行一致、幂等（2026-11-18） |
 | 28 | `simg_dump.py` | `src/tools/sparse.zig`、`wk image simg --dump` | ✅ | 头部/chunk 表文本 + 单测（2026-11-17） |
@@ -71,6 +71,7 @@
 | `linked_size.py` | `-m` | `-m/--map`（另有 `--out-dir`） | ✅ 输出命名一致 |
 | `encrypt_rsa_key.py` | `-d -a -r` | `-d/--des-key -a/--aes-key -r/--rsa -o` | ✅ |
 | `mk_prebootprog.py` | `-m -k -i -o` | `-m/--magic -k/--pnk -i -o` | ✅ |
+| `release_patch.py` | `-t -p -o -n -l -v` | `wk release-patch -t -p -o -n -l -v`（另有 `--root`） | ✅ 同名同义 |
 | `calc_linked_addr.py` | `-i -c -o` | 同名 | ✅ |
 | `gen_partition_table.py` | `-c -o -j` | `--config --out --json` | ✅ |
 | `gen_partition_file_list.py` | `-c -o` | `--config --output` | ✅ |

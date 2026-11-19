@@ -138,6 +138,8 @@ fn dispatch(io: std.Io, aa: std.mem.Allocator, argv: []const []const u8, out: *s
         try cmdSdkUpdate(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "rtt2freertos")) {
         try cmdRtt2Freertos(io, aa, rest, out);
+    } else if (std.mem.eql(u8, cmd, "release-patch")) {
+        try cmdReleasePatch(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "upg")) {
         try cmdUpg(io, aa, rest, out);
     } else if (std.mem.eql(u8, cmd, "panic")) {
@@ -302,6 +304,32 @@ fn locateAddr(
     }
     if (table.*) |*t| return t.describe(aa, addr);
     return aa.dupe(u8, "");
+}
+
+/// `wk release-patch [--root dir] [-t REF] [-p a,b] [-o DIR] [-n N] [--list] [-v]`
+/// —— 等价 `tools/scripts/release_patch.py`（需在 repo 工作区根运行，含 `.repo/manifest.xml`）。
+fn cmdReleasePatch(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *std.Io.Writer) !void {
+    const count: ?usize = if (getOpt(args, "--count") orelse getOpt(args, "-n")) |v|
+        (std.fmt.parseInt(usize, v, 10) catch return error.InvalidArgument)
+    else
+        null;
+
+    var summary = aic.release_patch.run(aa, io, .{
+        .root = getOpt(args, "--root") orelse ".",
+        .tag = getOpt(args, "--tag") orelse getOpt(args, "-t"),
+        .projects = getOpt(args, "--projects") orelse getOpt(args, "-p"),
+        .output = getOpt(args, "--output") orelse getOpt(args, "-o"),
+        .count = count,
+        .list = hasFlag(args, "--list") or hasFlag(args, "-l"),
+        .verbose = hasFlag(args, "--verbose") or hasFlag(args, "-v"),
+    }, .{ .writer = out }) catch |err| {
+        try out.print("release-patch 失败：{s}\n", .{@errorName(err)});
+        return err;
+    };
+    defer summary.deinit(aa);
+
+    if (summary.listing.len > 0) try out.writeAll(summary.listing);
+    return;
 }
 
 /// `wk rtt2freertos <defconfig> [-o out] [--dry-run]` —— 等价 `tools/scripts/rtt2freertos.py`。
@@ -1691,8 +1719,7 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
     }
 
     if (std.mem.eql(u8, sub, "extract")) {
-        const img = if (rest.len > 0 and !std.mem.startsWith(u8, rest[0], "-")) rest[0] else
-            (getOpt(rest, "--input") orelse getOpt(rest, "-i") orelse return error.MissingArgument);
+        const img = if (rest.len > 0 and !std.mem.startsWith(u8, rest[0], "-")) rest[0] else (getOpt(rest, "--input") orelse getOpt(rest, "-i") orelse return error.MissingArgument);
         const out_dir = getOpt(rest, "--output") orelse getOpt(rest, "-o");
         const res = aic.fwextract.extract(aa, io, img, out_dir) catch |err| {
             try out.print("extract 失败：{s}（img={s}）\n", .{ @errorName(err), img });
