@@ -19,8 +19,8 @@
 |----|------|------|----------|--------|
 | P1-1 | FAT32 / `--fullpart` / AICF `dirent_*` | ✅ | FAT32 + fullpart 均用 `mcopy` 回读；AICF length=32、dirent=0 与参考一致 | 2026-11-17 完成 |
 | P1-2 | littlefs 镜像（`makelittlefs.py`） | ✅ | `mklittlefs -l/-u` 可列出/解包；多文件嵌套内容一致 | 2026-11-18 完成（复用上游 littlefs 2.5） |
-| P1-3 | uffs 镜像（`makeuffs.py`） | ⛔ 受阻 | —— | 参考 `mkuffs.exe` 只是外壳，UFFS 文件系统实现（树/页状态/ECC）**不在本 SDK 源码内**（`bsp/artinchip/drv/spinand/uffs.c` 只含移植层，RT-Thread `components/dfs/filesystems` 无 uffs）。需引入上游 uffs 源码才可对齐，暂不猜测实现 |
-| P1-4 | `firmware_security_encrypt`（AES-XTS/nonce/tweak） | ⛔ 受阻 | 已实测模式特征（见下） | 工具为预编译 exe，SDK 无源码。**实测事实**：只读密钥文件前 16 B（AES-128）；输入必须是 16 的整数倍、无填充；改明文第 2 块只影响第 2~N 块（前向链式）；已排除 ECB / CBC / CTR(XOR 流) / 纯 XTS 结构。无源码情况下不猜测实现，留待上游公开 |
+| P1-3 | uffs 镜像（`makeuffs.py`） | ✅ | `wk image uffs` 调厂商 `mkuffs`，16 MiB 分区产物与参考逐字节一致（`check_uffs.py`，2026-11-19） | 策略：SDK 无核心源码，参照 C 构建同样调用 `mkuffs`；参数 `-t/-p/-b/-s/-x auto/-o 0/-f/-d` 与 `makeuffs.py` 完全一致。**旧记录（受阻）已作废**：参考 `mkuffs.exe` 只是外壳，UFFS 文件系统实现（树/页状态/ECC）**不在本 SDK 源码内**（`bsp/artinchip/drv/spinand/uffs.c` 只含移植层，RT-Thread `components/dfs/filesystems` 无 uffs）。需引入上游 uffs 源码才可对齐，暂不猜测实现 |
+| P1-4 | `firmware_security_encrypt`（nonce/tweak） | ✅ | `wk image fwenc` 调同一 exe（参数同 `mk_image.data_crypt_create_image`）；`preproc` 的 `data_crypt` 段已接入。对拍 `check_fwenc.py`：key+nonce+tweak / key+tweak / key-only 三组**逐字节一致**（2026-11-19） | 策略：算法无源码，按 C 构建同样调用厂商 exe。**旧实测（留在下方供参考）** 已实测模式特征（见下） | 工具为预编译 exe，SDK 无源码。**实测事实**：只读密钥文件前 16 B（AES-128）；输入必须是 16 的整数倍、无填充；改明文第 2 块只影响第 2~N 块（前向链式）；已排除 ECB / CBC / CTR(XOR 流) / 纯 XTS 结构。无源码情况下不猜测实现，留待上游公开 |
 | P1-5 | `encrypt_rsa_key.py` | ✅ | `wk image rsakey` 与参考脚本**逐字节一致**（私钥 AES/DES 加密、公钥 PKCS#1/SPKI 四种组合） | 2026-11-18 完成；公钥+对称密钥参考脚本自身会崩，我们按语义实现并写明差异 |
 | P1-6 | AIC 启动镜像 v2 签名/加密 | ✅ | `wk image aicimage` 与 `mk_image.py -p` **6 组镜像逐字节一致**（RSA-2048/HMAC、AES-128-CBC 含 SSK 派生、MD5+校验和、with_ext） | 2026-11-19 完成。未支持：SM2/SM4/ChaCha20/AES-CTR、pbp2/private2（遇配置即报错） |
 | P1-9 | `pre-process` 流水线（`wk image preproc`） | ✅ | `priv.bin`/`env.bin`/`loader.aic` 与 `mk_image.py -p` **逐字节一致**；`kernel.itb` 结构对拍一致；env 分区前缀（offset/UBI/GPT）3 种媒体全部逐字节一致 | 2026-11-19 完成（`src/tools/preproc.zig`）。已修：分区 offset 必须**原样**输出（`@0x4400`）且 UBI 卷 offset 不能丢；`itb` 条目带 `keydir` 时**报错**（FIT 签名未实现，P1-10）。未实现：`elf2itb`、`aicboot`(v1 遗留)、`spienc`/`spienctool`/`data_crypt`（厂商预编译 exe） |
@@ -40,7 +40,7 @@
 | P2-7 | `release_patch.py`（repo 工作流 → 单仓补丁） | ⬜ | manifest XML + `git format-patch` + 路径/主题重写，需本地 git 仓库夹具对拍 | 2026-11-19 审计登记：Zig 子进程 + 小型 XML 解析可实现；验收 = 同一仓库/同一 ref 下生成的补丁与参考逐字节一致 |
 | P2-8 | `mk_image.py -b/--burner` 与 `-i/--imgfile` | ⬜ | burner 目录（镜像拆分 .bin + 分区表 bin）与已打包镜像解包 | 2026-11-19 审计登记：`-e/--extract` 参考自身 `sys.exit(1)`、`-s/--sign` 参考未消费，不需要；验收 = 同一 image_cfg 下 burner 目录逐文件一致 / 解包后与原始 data 目录一致 |
 | P2-9 | `build_mini_bootloader.py` / `aic_build.py` 的 SCons 编排 / `onestep/*.bat` | ⬜ | 需 SCons 驱动层（保存/恢复 .config 等，跑子构建，拷产物） | 2026-11-19 审计登记：前置依赖是构建编排（`wk build` 目前只到编译计划）；验收 = 同一 defconfig 产出的 .elf/.bin 哈希与参考构建一致 |
-| P2-10 | `makefatfs.py -b/--reserved`（NFTL 预留块） | 🟡 | 已按参考的 `51*64*2048` / `(n+1)*64*2048` 实现，并按 `partition.json` 的 `partitions.nftl` 判定生效范围 | 2026-11-19：待与参考 `makefatfs.py -f` 对拍（需 `partition.json` + `partition_file_list.h` 夹具） |
+| P2-10 | `makefatfs.py -b/--reserved`（NFTL 预留块） | ✅ | `check_fat_nftl.py`：16 MiB 分区、预留 61 块 → **8,781,824 B 与参考一致**，BPB 一致，`mcopy` 可导出且内容一致 | 2026-11-19 完成：按 `partition.json` 的 `partitions.nftl` 判定生效范围，预留量 `51*64*2048` / `(n+1)*64*2048`，最后按簇对齐 |
 | P2-6 | 官方文档 `topics/` 464 篇 + images/webhelp | ⬜ | 目录/链接完整性 | 体积大，建议按需生成离线包，不全量入库 |
 
 ## P3 · 生态与二进制

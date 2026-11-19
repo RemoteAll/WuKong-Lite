@@ -673,8 +673,10 @@ fn usage(out: *std.Io.Writer) !void {
         \\  image pbp -i <pbp.bin> -o <out.bin> [-m PBP2] [-k <pnk.bin>]
         \\  image privres -c <cfg.json> [-l <cfg2.json,cfg3.json>] [-o <out.bin>]
         \\  image aicimage -c <image_cfg.json> -d <datadir> [-k <keydir>]   (AIC 启动镜像 v2：签名/加密)
-        \\  image preproc -c <image_cfg.json> -d <datadir> [-k <keydir>] [--timestamp <u32>]   (整条 pre-process 流水线)
+        \\  image preproc -c <image_cfg.json> -d <datadir> [-k <keydir>] [--tooldir <dir>] [--timestamp <u32>]   (整条 pre-process 流水线)
         \\  image rsakey -r <key.pem|der> [--aes-key <16B> | --des-key <8B>] [-o <outdir>]
+        \\  image uffs -i <dir> -o <img> -g <blockpages> -p <page> -s <oob> [-t <tooldir>]   (调厂商 mkuffs，与 SDK 用法一致)
+        \\  image fwenc --key <k> [--nonce <n>] [--tweak <t>] --infile <i> --outfile <o> [-t <tooldir>]   (调 firmware_security_encrypt)
         \\  image flashpack [--config <image_cfg.json>] [--payload-dir <dir>] [--out-dir <dir>]
         \\  image dump <file>
         \\
@@ -1688,6 +1690,60 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         return;
     }
 
+    if (std.mem.eql(u8, sub, "uffs")) {
+        const input_dir = getOpt(rest, "--input") orelse getOpt(rest, "-i") orelse return error.MissingArgument;
+        const out_file = getOpt(rest, "--output") orelse getOpt(rest, "-o") orelse return error.MissingArgument;
+        const block_pages = std.fmt.parseInt(u64, getOpt(rest, "--blockpagecount") orelse getOpt(rest, "-g") orelse
+            return error.MissingArgument, 0) catch return error.InvalidArgument;
+        const page_size = std.fmt.parseInt(u64, getOpt(rest, "--pagesize") orelse getOpt(rest, "-p") orelse
+            return error.MissingArgument, 0) catch return error.InvalidArgument;
+        const oob_size = std.fmt.parseInt(u64, getOpt(rest, "--oobsize") orelse getOpt(rest, "-s") orelse
+            return error.MissingArgument, 0) catch return error.InvalidArgument;
+        const tool_dir = getOpt(rest, "--tooldir") orelse getOpt(rest, "-t");
+
+        const res = aic.uffs.run(aa, io, .{
+            .input_dir = input_dir,
+            .out_file = out_file,
+            .block_pages = block_pages,
+            .page_size = page_size,
+            .oob_size = oob_size,
+            .tool_dir = tool_dir,
+        }) catch |err| {
+            try out.print("uffs 失败：{s}（in={s}, out={s}, page={d}, block_pages={d}, oob={d}, tooldir={s}）\n", .{
+                @errorName(err), input_dir, out_file, page_size, block_pages, oob_size, tool_dir orelse "(PATH)",
+            });
+            return err;
+        };
+        defer aa.free(res.output);
+        try out.print("UFFS: {s}（分区 {d} B / {d} 块，page={d}, block_pages={d}, oob={d}）\n", .{
+            res.output, res.part_size, res.part_blocks, page_size, block_pages, oob_size,
+        });
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "fwenc")) {
+        const key = getOpt(rest, "--key") orelse getOpt(rest, "-k") orelse return error.MissingArgument;
+        const input = getOpt(rest, "--infile") orelse getOpt(rest, "-i") orelse return error.MissingArgument;
+        const output = getOpt(rest, "--outfile") orelse getOpt(rest, "-o") orelse return error.MissingArgument;
+        const tool_dir = getOpt(rest, "--tooldir") orelse getOpt(rest, "-t");
+
+        aic.fwenc.run(aa, io, .{
+            .key = key,
+            .nonce = getOpt(rest, "--nonce") orelse getOpt(rest, "-n"),
+            .tweak = getOpt(rest, "--tweak"),
+            .input = input,
+            .output = output,
+            .tool_dir = tool_dir,
+        }) catch |err| {
+            try out.print("fwenc 失败：{s}（key={s}, in={s}, out={s}, tooldir={s}）\n", .{
+                @errorName(err), key, input, output, tool_dir orelse "(PATH)",
+            });
+            return err;
+        };
+        try out.print("固件加密: {s} -> {s}（key={s}）\n", .{ input, output, key });
+        return;
+    }
+
     if (std.mem.eql(u8, sub, "partlist")) {
         const cfg_path = getOpt(rest, "--config") orelse getOpt(rest, "-c") orelse return error.MissingArgument;
         const output = getOpt(rest, "--output") orelse getOpt(rest, "-o") orelse return error.MissingArgument;
@@ -1809,6 +1865,7 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
             .datadir = datadir,
             .keydir = keydir,
             .timestamp = ts,
+            .tool_dir = getOpt(rest, "--tooldir"),
         }) catch |err| {
             try out.print("preproc 失败：{s}（config={s}，datadir={s}）\n", .{ @errorName(err), cfg, datadir });
             return err;

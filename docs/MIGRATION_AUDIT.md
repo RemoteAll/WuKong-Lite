@@ -42,9 +42,9 @@
 | 12 | `gen_partition_table.py` | `src/tools/partition_table.zig`、`wk image part` | ✅ | 内容一致（忽略 CRLF）；`--json` 同参考 |
 | 13 | `itbimage/`（FIT 构建/签名/加密/导出） | `its.zig` + `itb.zig` + `fdt.zig`、`wk image itb/fitinfo` | ✅ | 图像签名 / 图像加密 / 配置签名 / 公钥注入 / `-E` 外部数据全部与参考逐字节一致：`check_fitsign.py`、`check_fitcipher.py`、`check_fitconfsign.py`、`check_fitsign_algos.py`（2026-11-19） |
 | 14 | `linked_size.py` | `src/tools/linksize.zig`、`wk image linksize` | ✅ | `.summary.csv` / `.detail.csv` 命名与内容一致（另有 `.dironly.csv` 增强；2026-11-17） |
-| 15 | `makefatfs.py` | `src/tools/fat.zig`、`wk image fat` | 🟡 | FAT12/16/32 + LFN + AICF 扩展块，`mcopy` 回读通过；`-a/-f/-i/-o/-g/-s/-c/-v` 已对齐；`-r/--raw` 语义等价（我们从不裁剪）；`-t/--tooldir` 不需要（自实现）。**待验证**：`-b/--reserved`（NFTL 预留块，2026-11-19 实现，按参考 `51*64*2048` / `(n+1)*64*2048` 计算）尚未与参考对拍 |
+| 15 | `makefatfs.py` | `src/tools/fat.zig`、`wk image fat` | ✅ | FAT12/16/32 + LFN + AICF 扩展块，`mcopy` 回读通过；`-a/-f/-i/-o/-g/-s/-c/-v` 已对齐；`-r/--raw` 语义等价（我们从不裁剪）；`-t/--tooldir` 不需要（自实现）。`-b/--reserved`（NFTL）已对拍：16 MiB 分区、预留 61 块 → 8,781,824 B 与参考一致，BPB 一致，文件可导出（`check_fat_nftl.py`，2026-11-19） |
 | 16 | `makelittlefs.py` | `src/tools/littlefs.zig`、`wk image littlefs` | ✅ | 复用上游 littlefs 2.5；`mklittlefs -l/-u` 验证内容一致（2026-11-18） |
-| 17 | `makeuffs.py` | — | 🔴 受阻 | UFFS 核心（树/页状态/ECC）源码不在 SDK（只有 `mkuffs.exe` 与 `drv/spinand/uffs.c` 移植层），无依据不猜 |
+| 17 | `makeuffs.py` | `src/tools/uffs.zig`、`wk image uffs` | ✅ | **策略：SDK 怎么用我们就怎么用**——SDK 内无 UFFS 核心源码，参照 `makeuffs.py` 同样调用厂商 `mkuffs`：`-t <partblkcnt> -p <page> -b <blockpages> -s <oob> -x auto -o 0 -f <out> -d <in>`；分区大小按 `partition_file_list.h` 匹配、`partblkcnt = partsize/(page*blockpages)` 与参考一致。对拍 `check_uffs.py`：16 MiB 分区产物 **17,301,504 B 逐字节一致**（2026-11-19） |
 | 18 | `merge_files.py` | `src/tools/merge.zig`、`wk image merge` | ✅ | 按序拼接字节一致（2026-11-17） |
 | 19 | `mk_image.py` | `preproc.zig` / `pack.zig` / `aicboot.zig` / `partcheck.zig` 等 | 🟡 | `-p` 预处理器 7 类段（privres/itb/uboot_env/aicimage/concatenate/bin + 显式错误 2 类）已实现并对拍；`-d/-c/-k/-o/-v` 已对齐。**缺口**：`-b/--burner`（额外产出 `burner/*.bin` 与分区表 bin）、`-i/--imgfile`（从已打包镜像解出组件目录）。`-e/--extract` 参考自身 `sys.exit(1)`（未实现），`-s/--sign` 参考脚本内**未被消费** |
 | 20 | `mk_prebootprog.py` | `src/tools/preboot.zig` + `des.zig`、`wk image pbp` | ✅ | 明文与 PNK 加密 PBP 均逐字节一致（512 B，DIFF=0；2026-11-18） |
@@ -64,7 +64,7 @@
 |------|----------|------|----------|
 | `makefatfs.py` | `-a -f -i -o -g -s -c -v -r -b -t` | `--auto --fullpart --input-dir --output --size --sector --cluster --label --raw --reserved` | `-t` 不需要（自实现）；`-r` 接受（默认即不裁剪）；`-b` 本轮实现（NFTL） |
 | `makelittlefs.py` | `-i -o -p -b -t -g -r` | `-i -o -p -b -s/-size -r` | `-t` 不需要；其余等价 |
-| `makeuffs.py` | `-i -o -g -p -s -t` | — | 🔴 受阻（见第 2 节第 17 项） |
+| `makeuffs.py` | `-i -o -g -p -s -t` | `wk image uffs -i -o -g -p -s -t` | 同名同义（`-t` 为工具目录） |
 | `mk_image.py` | `-d -i -o -c -k -e -s -b -p -v` | `preproc: -c -d -k --timestamp`；`pack: -c -d -o --sdk-output --compare` | `-e/-s` 参考未实现/未消费；`-b/-i/-v` 见第 2 节第 19 项 |
 | `rtt2freertos.py` | `-o -n --console-uart --sysname --sdk-root --verify` | `-o -n --dry-run --console-uart --sysname` | 其余 2 项已登记（第 2 节第 26 项） |
 | `panic_parse.py` | `-c -e -l -v` | `-c -e -l -v`（另有 `--addr2line`） | ✅ 本轮补齐 `-v` |
@@ -96,7 +96,7 @@
 | CPIO | `crc`/`newc` | 同 | ✅ `cpio.exe -it` 可列出 |
 | 分区表 | `gen_partition_table`（C 头 + JSON）、`gen_partition_file_list`（10 列 CSV） | 同 | ✅ 内容一致 |
 | PBP / 私有资源 | `mk_prebootprog`（DES/PNK）、`mk_private_resource` | 同 | ✅ 逐字节一致 |
-| UFFS | `makeuffs` + `mkuffs.exe` | — | 🔴 源码不在 SDK |
+| UFFS | `makeuffs` + `mkuffs.exe` | 调同一 `mkuffs`（参数/分区计算同参考） | ✅ 产物逐字节一致（`check_uffs.py`） |
 
 ## 5. 已迁移并有验证（✅）摘要
 
@@ -111,7 +111,7 @@
 | `build_mini_bootloader.py` | mini 变体子构建 | 依赖上一条；其余是文件保存/恢复与拷贝逻辑 | mini 构建产物 `bootloader.bin` 与参考一致 |
 | `mk_image.py -b/--burner` | burner 格式（`burner/*.bin` + 分区表 bin） | 参考 3514-3540 行：按媒体拆分为 `.bin` 并写分区表 | 同一 image_cfg 下 `burner/` 目录逐文件一致 |
 | `mk_image.py -i/--imgfile` | 从已打包镜像解出组件目录 | 解析 AIC.FW 容器（我们已有解析能力）→ 还原 `data/` 目录 | 解包后目录与原始 `data/` 逐文件一致 |
-| `makefatfs.py -b/--reserved`（NFTL） | 已实现，未对拍 | 构造 `partition.json`（nftl 含该镜像）+ `partition_file_list.h` | 与参考 `makefatfs.py -f` 产出的镜像大小/内容一致 |
+| ~~`makefatfs.py -b/--reserved`（NFTL）~~ | 已完成 | — | `check_fat_nftl.py`：8,781,824 B 与参考一致、BPB 一致、文件可导出（2026-11-19） |
 | `rtt2freertos.py --verify` | Kconfig 校验 | 复用本项目 `kconfig.zig` | 与参考在若干 defconfig 上的校验结论一致 |
 | `partition_check.py -v` | verbose 输出 | 追加统计行 | 仅输出差异，不影响退出码 |
 | `upgcmd` 服务端/USB | 无源码 | 按开源 `lib/aicupg` 协议实现 | 与 `upgcmd.exe` 服务端互通 |
@@ -125,8 +125,9 @@
 - **烧写协议**：主机端 `upgcmd` 源码（内部 `aicupg`）与 USB/UART 协议。
 
 ### P1 镜像与安全能力
-- **UFFS**（`makeuffs.py`）—— 受阻：无核心源码，不可猜实现；
-- **固件加密** `firmware_security_encrypt`（nonce/tweak）—— 受阻：预编译 exe，SDK 无源码；
+- ~~UFFS~~ 已迁移：调用厂商 `mkuffs`（见第 2 节第 17 项）；
+- ~~固件加密~~ 已迁移：`wk image fwenc` 调同一 `firmware_security_encrypt`（参数同 `mk_image.data_crypt_create_image`）；
+  `preproc` 的 `data_crypt` 段也已改为调用它。对拍 `check_fwenc.py` 三组参数逐字节一致；
   实测：只取密钥前 16 B、输入需 16 B 对齐且不填充、改动一块明文影响其后所有块（前向链式），
   已排除 ECB/CBC/CTR(XOR 流)；
 - **SPIENC / eFuse 安全启动** —— 保留官方工具。

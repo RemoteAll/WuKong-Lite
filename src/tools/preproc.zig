@@ -15,6 +15,7 @@
 const std = @import("std");
 const image_cfg = @import("image_cfg.zig");
 const privres = @import("privres.zig");
+const fwenc = @import("fwenc.zig");
 const pack = @import("pack.zig");
 const its = @import("its.zig");
 const aicboot = @import("aicboot.zig");
@@ -30,7 +31,7 @@ pub const Error = error{
     NoPreProcess,
 };
 
-pub const Kind = enum { aicprivate, itb, uboot_env, aicimage, concatenate };
+pub const Kind = enum { aicprivate, itb, uboot_env, aicimage, concatenate, data_crypt };
 
 pub const Step = struct {
     /// 段名（如 `aicimage`）
@@ -47,6 +48,8 @@ pub const Options = struct {
     keydir: ?[]const u8 = null,
     /// FIT 的 `timestamp`（与 `SOURCE_DATE_EPOCH` 对齐即可逐字节对拍）。
     timestamp: u32 = 0,
+    /// 厂商工具目录（`mkuffs` / `firmware_security_encrypt`）；空则用 PATH。
+    tool_dir: ?[]const u8 = null,
 };
 
 fn joinPath(allocator: std.mem.Allocator, dir: []const u8, name: []const u8) ![]u8 {
@@ -276,6 +279,69 @@ fn runAicimage(
     }
 }
 
+/// `data_crypt` 段：调用厂商 `firmware_security_encrypt`（与参考
+/// `mk_image.py::data_crypt_create_image` 同样的参数与路径解析规则）。
+fn runDataCrypt(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    datadir: []const u8,
+    keydir: []const u8,
+    tool_dir: ?[]const u8,
+    items: std.json.ObjectMap,
+    steps: *std.ArrayList(Step),
+) !void {
+    var it = items.iterator();
+    while (it.next()) |e| {
+        const name = e.key_ptr.*;
+        const cfg = image_cfg.asObject(e.value_ptr.*) orelse return Error.BadConfig;
+        const key_name = image_cfg.getStr(cfg, "key") orelse return Error.BadConfig;
+        const input_name = image_cfg.getStr(cfg, "input") orelse return Error.BadConfig;
+
+        // 路径解析：key/nonce 先 keydir 再 datadir（等价参考 get_file_path）
+        const key_path = try resolveKeyOrData(allocator, io, keydir, datadir, key_name);
+        defer allocator.free(key_path);
+        var nonce_path: ?[]u8 = null;
+        defer if (nonce_path) |p| allocator.free(p);
+        if (image_cfg.getStr(cfg, "nonce")) |n| {
+            nonce_path = try resolveKeyOrData(allocator, io, keydir, datadir, n);
+        }
+
+        const input_path = try resolveIn(allocator, io, datadir, input_name);
+        defer allocator.free(input_path);
+        const out_path = try joinPath(allocator, datadir, name);
+        defer allocator.free(out_path);
+
+        try fwenc.run(allocator, io, .{
+            .key = key_path,
+            .nonce = nonce_path,
+            .tweak = image_cfg.getStr(cfg, "tweak"),
+            .input = input_path,
+            .output = out_path,
+            .tool_dir = tool_dir,
+        });
+
+        const st = std.Io.Dir.cwd().statFile(io, out_path, .{}) catch return Error.MissingFile;
+        try steps.append(allocator, .{
+            .proc = "data_crypt",
+            .name = try allocator.dupe(u8, name),
+            .size = @intCast(st.size),
+            .kind = .data_crypt,
+        });
+    }
+}
+
+/// key 类文件查找：先 keydir 再 datadir。
+fn resolveKeyOrData(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    keydir: []const u8,
+    datadir: []const u8,
+    name: []const u8,
+) ![]u8 {
+    if (resolveIn(allocator, io, keydir, name)) |p| return p else |_| {}
+    return resolveIn(allocator, io, datadir, name);
+}
+
 fn runConcatenate(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -352,11 +418,13 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, opt: Options) ![]Step {
             try runAicimage(allocator, io, opt.datadir, keydir, items, &steps);
         } else if (std.mem.eql(u8, proc, "concatenate")) {
             try runConcatenate(allocator, io, opt.datadir, items, &steps);
+        } else if (std.mem.eql(u8, proc, "data_crypt")) {
+            try runDataCrypt(allocator, io, opt.datadir, keydir, opt.tool_dir, items, &steps);
         } else if (std.mem.eql(u8, proc, "aicboot") or std.mem.eql(u8, proc, "elf2itb")) {
             return Error.UnsupportedProc;
-        } else if (std.mem.eql(u8, proc, "spienc") or std.mem.eql(u8, proc, "spienctool") or
-            std.mem.eql(u8, proc, "data_crypt"))
-        {
+        } else if (std.mem.eql(u8, proc, "spienc") or std.mem.eql(u8, proc, "spienctool")) {
+            // 这两个段在 20 个官方 image_cfg.json 里出现 0 次，且同样只有预编译 exe；
+            // 真要用时按厂商 exe 包装（同 data_crypt）即可。
             return Error.VendorToolRequired;
         } else {
             return Error.UnsupportedProc;
