@@ -22,16 +22,33 @@ pub fn resolve(
 ) ![]u8 {
     const exe_suffix = if (@import("builtin").os.tag == .windows) ".exe" else "";
 
-    if (tool_dir) |dir| {
+    const explicit_dir = if (tool_dir) |dir| blk: {
         const trimmed = std.mem.trimEnd(u8, dir, "/\\");
-        if (trimmed.len > 0) {
-            if (exe_suffix.len > 0) {
-                const p = try std.fmt.allocPrint(allocator, "{s}/{s}{s}", .{ trimmed, name, exe_suffix });
-                if (std.Io.Dir.cwd().statFile(io, p, .{})) |_| return p else |_| allocator.free(p);
-            }
-            const p = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ trimmed, name });
+        break :blk if (trimmed.len > 0) trimmed else null;
+    } else null;
+
+    if (explicit_dir) |trimmed| {
+        if (exe_suffix.len > 0) {
+            const p = try std.fmt.allocPrint(allocator, "{s}/{s}{s}", .{ trimmed, name, exe_suffix });
             if (std.Io.Dir.cwd().statFile(io, p, .{})) |_| return p else |_| allocator.free(p);
         }
+        const p = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ trimmed, name });
+        if (std.Io.Dir.cwd().statFile(io, p, .{})) |_| return p else |_| allocator.free(p);
+        // 调用方显式指定了目录却没找到：尊重它，直接退回裸名，
+        // 不再去仓库内工具目录里找（否则会悄悄用上别的版本）。
+        return std.fmt.allocPrint(allocator, "{s}{s}", .{ name, exe_suffix });
+    }
+
+    // 未指定目录时，优先用仓库内随源码分发的厂商工具（`tools/reference/`）：
+    // data_crypt 的 firmware_security_encrypt、UFFS 的 mkuffs 等，
+    // 这样 `wk` 不必依赖外部 SDK 路径也能工作。
+    if (exe_suffix.len > 0) {
+        const p = try std.fmt.allocPrint(allocator, "tools/reference/{s}{s}", .{ name, exe_suffix });
+        if (std.Io.Dir.cwd().statFile(io, p, .{})) |_| return p else |_| allocator.free(p);
+    }
+    {
+        const p = try std.fmt.allocPrint(allocator, "tools/reference/{s}", .{name});
+        if (std.Io.Dir.cwd().statFile(io, p, .{})) |_| return p else |_| allocator.free(p);
     }
 
     // 兜底：裸名（PATH 解析由 spawn 完成）
