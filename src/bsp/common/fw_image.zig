@@ -379,17 +379,16 @@ pub const PageTable = struct {
 
             if (pageaddr1 <= page_cnt + 1) {
                 const off1 = (pageaddr1 - 1) * page_bytes;
-                const cs1 = checksum.imageCalcChecksum(pageSlice(spl, off1, page_bytes));
+                const cs1 = ~checksum.imageCalcChecksum(pageSlice(spl, off1, page_bytes));
                 std.mem.writeInt(u32, out[entry_off + 16 ..][0..4], cs1, .little);
             } else {
                 std.mem.writeInt(u32, out[entry_off + 16 ..][0..4], 0xFFFFFFFF, .little);
             }
         }
 
-        // 整页校验和写入表头偏移 36（第一个表项的 checksum1 位置）
-        std.mem.writeInt(u32, out[36..][0..4], 0, .little);
-        const page_sum = checksum.imageCalcChecksum(out);
-        std.mem.writeInt(u32, out[36..][0..4], ~page_sum, .little);
+        // 整页校验和写回表头偏移 36（= 第一个表项的 checksum1 位置）。
+        // 参考 `aic_calc_checksum()` 返回 `~sum`；计算时该位置的值是表项 0 的 checksum1（参考硬编码为 0）。
+        std.mem.writeInt(u32, out[36..][0..4], ~checksum.imageCalcChecksum(out), .little);
         return out;
     }
 
@@ -402,7 +401,7 @@ pub const PageTable = struct {
         _ = pageaddr1;
         if (pageaddr2 < 2 * PAGE_TABLE_MAX_ENTRY and pageaddr2 <= page_cnt + 1) {
             const off2 = (@as(usize, pageaddr2) - 1) * page_bytes;
-            const cs2 = checksum.imageCalcChecksum(pageSlice(spl, off2, page_bytes));
+            const cs2 = ~checksum.imageCalcChecksum(pageSlice(spl, off2, page_bytes));
             std.mem.writeInt(u32, out[entry_off + 4 ..][0..4], pageaddr2, .little);
             std.mem.writeInt(u32, out[entry_off + 8 ..][0..4], cs2, .little);
             std.mem.writeInt(u32, out[entry_off + 12 ..][0..4], 0xFFFFFFFF, .little);
@@ -413,9 +412,19 @@ pub const PageTable = struct {
         }
     }
 
-    /// 校验整页校验和（写入时取反，校验时 sum+1==0）。
+    /// 校验表头整页校验和：按参考写入顺序复算（偏移 36 处按表项 0 的 checksum1 = 0 参与求和）。
+    /// 注意**不能**套用 `sum+1==0`：写完整页校验和之后整页 sum 一般不为 0。
     pub fn verify(page: []const u8) bool {
-        return checksum.verifyChecksum(page);
+        if (page.len < HEAD_SIZE + ENTRY_SIZE) return false;
+        const stored = std.mem.readInt(u32, page[36..][0..4], .little);
+        var sum: u32 = 0;
+        var i: usize = 0;
+        const cnt = page.len / 4;
+        while (i < cnt) : (i += 1) {
+            const w = if (i == 9) 0 else std.mem.readInt(u32, page[i * 4 ..][0..4], .little); // 36 = 9 * 4
+            sum +%= w;
+        }
+        return stored == ~sum;
     }
 
     pub fn entries(page: []const u8) !u32 {

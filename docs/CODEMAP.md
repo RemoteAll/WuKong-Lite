@@ -156,6 +156,9 @@ FAT12 项：entry0 = 0xFF8、entry1 = 0xFFF；FAT16：0xFFF8 / 0xFFFF
   参考自身对真实镜像必崩；我们按打包端权威布局实现。
 - **UFFS / 固件加密**：`wk image uffs` / `wk image fwenc`（调 SDK 自带 `mkuffs.exe` /
   `firmware_security_encrypt.exe`，参数与参考脚本完全一致；`--tooldir` 指目录）。
+- **量产烧写镜像**：`wk image burner -c <cfg> -d <datadir> -o <outdir>`（等价 `mk_image.py -b`）
+  → `<outdir>/burner/*.bin`：整片 flash 镜像（0xFF 预填 + 组件按分区落位 + spi-nand 页表）
+  与分区烧写表（每项 16 B）。spi-nand 按 `array_organization` 逐项出产物。
 - **官方烧写工具**：`tools/fetch-upgcmd-deps.ps1` 补齐 upgcmd 的 3 个 DLL，
   产物在 `wk/image/tools/upgcmd`；用法见 `docs/FLASHING.md`。
 - **官方文档**：`docs/official/`（迁移 `doc/skills/aiburn` 与第三方许可证）。

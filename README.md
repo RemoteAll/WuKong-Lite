@@ -161,6 +161,7 @@ zig-out\bin\wk.exe image littlefs -i payload/data -o pack/data.lfs -b 4096 -p 25
 zig-out\bin\wk.exe image uffs -i payload/data -o pack/data.uffs -g 4096 -p 2048 -s pack/partition_file_list.h
 zig-out\bin\wk.exe image fwenc --key fw.key --infile app.bin --outfile app.enc
 zig-out\bin\wk.exe image extract pack/firmware.img -o extracted
+zig-out\bin\wk.exe image burner -c pack/image_cfg.json -d pack -o .
 powershell -ExecutionPolicy Bypass -File tools\build-zig-sdk.ps1
 zig-out\bin\wk.exe fs install -s payload/data -d output/rootfs -o output
 zig-out\bin\wk.exe image pbp -i bootloader.bin -o bootloader.pbp -k pnk.bin

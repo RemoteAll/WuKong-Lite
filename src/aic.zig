@@ -49,6 +49,7 @@ pub const ext_tool = @import("tools/ext_tool.zig");
 pub const uffs = @import("tools/uffs.zig");
 pub const fwenc = @import("tools/fwenc.zig");
 pub const fwextract = @import("tools/fwextract.zig");
+pub const burner = @import("tools/burner.zig");
 pub const flashpack = @import("tools/flashpack.zig");
 pub const partition_table = @import("tools/partition_table.zig");
 pub const pack = @import("tools/pack.zig");

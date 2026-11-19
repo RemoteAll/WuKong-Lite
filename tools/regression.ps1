@@ -13,7 +13,7 @@
 
 param(
     [switch]$SkipBuild,
-    [int]$MinTests = 127,
+    [int]$MinTests = 130,
     [int]$MinCases = 34
 )
 
@@ -344,7 +344,7 @@ $py = 'C:\Users\qcjxb\AppData\Local\Programs\Python\Python312\python.exe'
 if (-not (Test-Path $py)) { $py = (Get-Command python -ErrorAction SilentlyContinue).Source }
 if ($py -and (Test-Path $py)) {
     $env:PYTHONIOENCODING = 'utf-8'
-    foreach ($script in @('check_upg_send.py', 'check_upg_timeout.py', 'check_aicimage.py', 'check_preproc.py', 'check_envparts.py', 'check_fitsign.py', 'check_fitcipher.py', 'check_fitconfsign.py', 'check_fitsign_algos.py', 'check_uffs.py', 'check_fwenc.py', 'check_fat_nftl.py', 'check_fwextract.py')) {
+    foreach ($script in @('check_upg_send.py', 'check_upg_timeout.py', 'check_aicimage.py', 'check_preproc.py', 'check_envparts.py', 'check_fitsign.py', 'check_fitcipher.py', 'check_fitconfsign.py', 'check_fitsign_algos.py', 'check_uffs.py', 'check_fwenc.py', 'check_fat_nftl.py', 'check_fwextract.py', 'check_burner.py')) {
         $path = Join-Path $repo ('tools\checks\' + $script)
         if (-not (Test-Path $path)) { Case-Skip $script '脚本缺失'; continue }
         $text = (& $py $path 2>&1 | Out-String)

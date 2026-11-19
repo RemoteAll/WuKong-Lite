@@ -1762,6 +1762,25 @@ fn cmdImage(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, out: *s
         return;
     }
 
+    if (std.mem.eql(u8, sub, "burner")) {
+        const cfg_path = getOpt(rest, "--config") orelse getOpt(rest, "-c") orelse return error.MissingArgument;
+        const data_dir = getOpt(rest, "--datadir") orelse getOpt(rest, "-d") orelse return error.MissingArgument;
+        const out_dir = getOpt(rest, "--outdir") orelse getOpt(rest, "-o") orelse data_dir;
+
+        var res = aic.burner.build(aa, io, cfg_path, data_dir, out_dir) catch |err| {
+            try out.print("burner 失败：{s}（cfg={s}, datadir={s}, outdir={s}）\n", .{
+                @errorName(err), cfg_path, data_dir, out_dir,
+            });
+            return err;
+        };
+        defer res.deinit(aa);
+        for (res.files, res.sizes) |f, sz| {
+            try out.print("  {s} {d} B\n", .{ f, sz });
+        }
+        try out.print("burner: {d} 个文件 -> {s}\n", .{ res.files.len, out_dir });
+        return;
+    }
+
     if (std.mem.eql(u8, sub, "partlist")) {
         const cfg_path = getOpt(rest, "--config") orelse getOpt(rest, "-c") orelse return error.MissingArgument;
         const output = getOpt(rest, "--output") orelse getOpt(rest, "-o") orelse return error.MissingArgument;
