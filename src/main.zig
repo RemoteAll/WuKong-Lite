@@ -406,6 +406,35 @@ fn cmdRtt2Freertos(io: std.Io, aa: std.mem.Allocator, args: []const []const u8, 
 
     try writeText(io, out_path, result.text);
     try out.print("written to {s}\n", .{out_path});
+
+    if (hasFlag(args, "--verify")) {
+        const sdk_root_arg = getOpt(args, "--sdk-root");
+        var owned_root: ?[]u8 = null;
+        defer if (owned_root) |r| aa.free(r);
+        const sdk_root: ?[]const u8 = blk: {
+            if (sdk_root_arg) |r| {
+                const cwd = try std.process.currentPathAlloc(io, aa);
+                const resolved = std.fs.path.resolveAlloc(aa, &.{ cwd, r }) catch return error.OutOfMemory;
+                owned_root = resolved;
+                break :blk resolved;
+            }
+            const start = std.fs.path.dirname(out_path) orelse ".";
+            const found = rtt2freertos.findSdkRoot(aa, io, start) catch null;
+            if (found) |f| owned_root = f;
+            break :blk found;
+        };
+        if (sdk_root) |root| {
+            var vrep = rtt2freertos.verify(aa, io, root, result.text, result.chip, result.board, result.app) catch |err| {
+                try out.print("  [verify 失败] {s}（sdk_root={s}）\n", .{ @errorName(err), root });
+                return err;
+            };
+            defer vrep.deinit();
+            try out.writeAll(vrep.text);
+        } else {
+            try out.writeAll("  [skipped] SDK root not found (use --sdk-root)\n");
+        }
+    }
+
     try out.print("\nnext steps:\n  scons --apply-def={s}_defconfig && scons -j8\n", .{result.plan_name});
 }
 

@@ -53,7 +53,7 @@
 | 23 | `panic_parse.py` | `src/tools/panic.zig`、`wk panic` | ✅ | 同一日志 + `d13x.elf` 输出逐行一致；本轮补 `-v/--verbose`（2026-11-19） |
 | 24 | `partition_check.py` | `src/tools/partcheck.zig`、`wk image partcheck` | ✅ | 50%/125% 样本与 `--strict` 退出码同参考（2026-11-18） |
 | 25 | `release_patch.py` | `src/tools/release_patch.zig`、`wk release-patch` | ✅ | manifest XML（含 `<include>`/`<linkfile>`）+ `git format-patch` + 逐行路径/主题重写；`-t/-p/-o/-n/-l/-v` 全对齐。对拍 `check_release_patch.py`：自建 repo 工作区（双 git 子仓库 + linkfile + 未匹配 ref 的子项目），tag（不含边界）/ 原始 SHA（含边界）/ `-n 1` / `-p 子集` 四种用法共 8 个 patch **逐字节一致**，`--list` 文本一致（2026-11-19） |
-| 26 | `rtt2freertos.py` | `src/tools/rtt2freertos.zig`、`wk rtt2freertos` | 🟡 | 28 个官方 defconfig 转换逐字节一致；`-o/-n/--console-uart/--sysname` 已对齐；**缺口**：`--sdk-root`（自动向上搜索可替代）、`--verify`（依赖 kconfiglib 校验，可用本项目 Kconfig 解析实现） |
+| 26 | `rtt2freertos.py` | `src/tools/rtt2freertos.zig`、`wk rtt2freertos` | ✅ | 28 个官方 defconfig 转换逐字节一致；`-o/-n/--console-uart/--sysname/--sdk-root/--verify` 全部对齐。`--verify` 用 **自家 Kconfig 解析**复刻 kconfiglib 语义（生成 `.Kconfig.prj` + 按 SDK 根基准加载整棵树 + “符号是否有定义”判定）；对拍 `check_rtt_verify.py`：28 个 rt-thread defconfig 的 verify 段输出**逐行一致**（26 个 all-defined / 2 个 has-unknown），`FAILS=0`（2026-11-19） |
 | 27 | `sdk_update.py` | `src/tools/sdk_update.zig`、`wk sdk-update` | ✅ | pinmux 修复逐行一致、幂等（2026-11-18） |
 | 28 | `simg_dump.py` | `src/tools/sparse.zig`、`wk image simg --dump` | ✅ | 头部/chunk 表文本 + 单测（2026-11-17） |
 | 29 | `upgcmd`（预编译二进制）+ `doc/skills/aiburn/scripts/aiburn/aicupg_client.py` | `upg_frame.zig` / `upg_payload.zig` / `upg_client.zig`、`wk upg *` | 🟡 | 帧层 7 组、请求层 15 组、TCP 会话均已与参考逐字节一致；**缺口**：`upgcmd` 服务端与 USB 通道（厂商二进制，无源码） |
@@ -66,7 +66,7 @@
 | `makelittlefs.py` | `-i -o -p -b -t -g -r` | `-i -o -p -b -s/-size -r` | `-t` 不需要；其余等价 |
 | `makeuffs.py` | `-i -o -g -p -s -t` | `wk image uffs -i -o -g -p -s -t` | 同名同义（`-t` 为工具目录） |
 | `mk_image.py` | `-d -i -o -c -k -e -s -b -p -v` | `preproc: -c -d -k --timestamp`；`pack: -c -d -o --sdk-output --compare`；`extract <img> [-o]`；`burner -c -d -o` | `-e/-s` 参考未实现/未消费；`-v` 无需（不打印过程日志）；`-i`/`-b` 已等价实现 |
-| `rtt2freertos.py` | `-o -n --console-uart --sysname --sdk-root --verify` | `-o -n --dry-run --console-uart --sysname` | 其余 2 项已登记（第 2 节第 26 项） |
+| `rtt2freertos.py` | `-o -n --console-uart --sysname --sdk-root --verify` | `-o -n --dry-run --console-uart --sysname --sdk-root --verify` | ✅ 全部对齐 |
 | `panic_parse.py` | `-c -e -l -v` | `-c -e -l -v`（另有 `--addr2line`） | ✅ 本轮补齐 `-v` |
 | `linked_size.py` | `-m` | `-m/--map`（另有 `--out-dir`） | ✅ 输出命名一致 |
 | `encrypt_rsa_key.py` | `-d -a -r` | `-d/--des-key -a/--aes-key -r/--rsa -o` | ✅ |

@@ -56,7 +56,7 @@
 
 1. ~~P1-5 `encrypt_rsa_key`~~ ✅
 2. ~~P2-5 `sdk_update.py` / `panic_parse.py` / `rtt2freertos.py`~~ ✅
-3. P2-5 余项：`release_patch.py`（发布补丁）、`build_mini_bootloader.py`（子构建编排，需 SCons 环境）
+3. P2-5 余项：~~`release_patch.py`~~ ✅（`wk release-patch`）；`build_mini_bootloader.py`（子构建编排，需 SCons 环境，官方 29 个 defconfig 无一启用 `CONFIG_AIC_BOOTLOADER_DUAL_SPL`，属 SDK 构建系统本体，登记为边界外）
 4. P0-3 主机烧写协议：按开源设备端 `lib/aicupg` 实现 UART 客户端（无 DLL 依赖）
 5. P1-6 ITS `signature*`/`cipher` 节点 + AIC 头签名/加密联动（独立 RSA/AES 已就绪）
 6. P1-3 / P1-4 待上游源码（uffs 核心、firmware_security_encrypt），不猜测实现

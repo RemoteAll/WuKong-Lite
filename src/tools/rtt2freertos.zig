@@ -409,6 +409,10 @@ pub const Result = struct {
     text: []const u8,
     plan_name: []const u8,
     report: Report,
+    /// 工程头字段（`--verify` 生成 `.Kconfig.prj` 要用）。
+    chip: []const u8 = "",
+    board: []const u8 = "",
+    app: []const u8 = "",
     pub fn deinit(self: *Result) void {
         self.arena.deinit();
         self.* = undefined;
@@ -627,7 +631,191 @@ pub fn convert(allocator: std.mem.Allocator, input: []const u8, opts: Options) !
             .added = conv.added.items,
             .silent = conv.silent,
         },
+        .chip = chip.?,
+        .board = board.?,
+        .app = app.?,
     };
+}
+
+// ---------------------------------------------------------------------------
+// --verify：目标 Kconfig 树里是否真有这些符号（等价参考的 kconfiglib 校验）
+// ---------------------------------------------------------------------------
+//
+// 参考 `verify()` 的做法：在 SDK 根写临时 `.Kconfig.prj`（把 chip/board/kernel/app 的
+// Kconfig 串起来），再加载 SDK 根 `Kconfig`（它内部 `source ".Kconfig.prj"`），
+// 然后对**输出 defconfig 的每一行**判断符号是否在树中“有定义”。
+//
+// 两个与 kconfiglib 等价的口径：
+//   * kconfiglib 会为 `select`/`depends` 里被引用但未声明的名字也建 Symbol（nodes 为空）；
+//     我们的解析器只为 `config/menuconfig` 声明建 item —— 天然等价于“nodes 非空”。
+//   * 只认 `CONFIG_X=...` 形式（`# CONFIG_X is not set` 不算风险项）。
+pub const VerifyReport = struct {
+    arena: std.heap.ArenaAllocator,
+    /// 直接打印的报告文本（已带前缀缩进，与参考逐字对齐）。
+    text: []const u8,
+    unknown: usize,
+    risky: usize,
+
+    pub fn deinit(self: *VerifyReport) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+};
+
+/// 从 `start` 向上找含 `SConstruct` 与 `kernel/` 的目录（参考 `find_sdk_root()`）。
+pub fn findSdkRoot(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    start: []const u8,
+) !?[]u8 {
+    // 注意：`std.fs.path.resolveAlloc` 只做**字符串**层面的解析，不会帮你接上 cwd，
+    // 所以相对路径必须先拼上当前工作目录，否则向上遍历会在第一层就结束。
+    const cwd = try std.process.currentPathAlloc(io, allocator);
+    defer allocator.free(cwd);
+    var cur = try std.fs.path.resolveAlloc(allocator, &.{ cwd, start });
+    errdefer allocator.free(cur);
+    while (true) {
+        const sc = try std.fs.path.join(allocator, &.{ cur, "SConstruct" });
+        defer allocator.free(sc);
+        const kern = try std.fs.path.join(allocator, &.{ cur, "kernel" });
+        defer allocator.free(kern);
+        const has_sc = if (std.Io.Dir.cwd().statFile(io, sc, .{})) |_| true else |_| false;
+        const has_kern = if (std.Io.Dir.cwd().statFile(io, kern, .{})) |st| st.kind == .directory else |_| false;
+        if (has_sc and has_kern) return cur;
+
+        const parent = std.fs.path.dirname(cur) orelse return null;
+        if (std.mem.eql(u8, parent, cur)) return null;
+        const next = try allocator.dupe(u8, parent);
+        allocator.free(cur);
+        cur = next;
+    }
+}
+
+/// 生成 `.Kconfig.prj` 正文（与参考逐字一致）。
+fn buildPrjKconfig(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    sdk_root: []const u8,
+    chip: []const u8,
+    board: []const u8,
+    kernel: []const u8,
+    app: []const u8,
+) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    try out.writer.print("source \"bsp/artinchip/sys/{s}/Kconfig.chip\"\n", .{chip});
+    try out.writer.print("source \"target/{s}/common/Kconfig.board\"\n", .{chip});
+    const ext_rel = try std.fmt.allocPrint(allocator, "target/{s}/{s}/Kconfig.extend", .{ chip, board });
+    defer allocator.free(ext_rel);
+    const ext_abs = try std.fs.path.join(allocator, &.{ sdk_root, ext_rel });
+    defer allocator.free(ext_abs);
+    if (std.Io.Dir.cwd().statFile(io, ext_abs, .{})) |_| {
+        try out.writer.print("source \"{s}\"\n", .{ext_rel});
+    } else |_| {}
+    try out.writer.print("source \"kernel/{s}/Kconfig\"\n", .{kernel});
+    try out.writer.print("source \"application/{s}/{s}/Kconfig\"\n", .{ kernel, app });
+    if (std.mem.eql(u8, kernel, "rt-thread")) {
+        try out.writer.writeAll("source \"tools/env/packages/packages/Kconfig\"\n");
+    }
+    return out.toOwnedSlice();
+}
+
+/// 校验输出 defconfig 里的符号在目标 Kconfig 树中是否有定义。
+pub fn verify(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    sdk_root: []const u8,
+    output_text: []const u8,
+    chip: []const u8,
+    board: []const u8,
+    app: []const u8,
+) !VerifyReport {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+
+    // 参考靠“进程 cwd = SDK 根”来解析 Kconfig 里的相对 `source`（kconfiglib 的 $srctree 默认就是 cwd），
+    // 这里同样临时切到 SDK 根，写完/校验完再切回来（`Dir.writeFile` 的 sub_path 也只接受相对路径）。
+    const saved_cwd = try std.process.currentPathAlloc(io, a);
+    try std.process.setCurrentPath(io, sdk_root);
+    defer std.process.setCurrentPath(io, saved_cwd) catch {};
+
+    // 1) 写临时 .Kconfig.prj（SDK 根 Kconfig 里有 `source ".Kconfig.prj"`；参考会残留它，我们清掉）
+    const prj_body = try buildPrjKconfig(a, io, sdk_root, chip, board, "freertos", app);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = ".Kconfig.prj", .data = prj_body });
+    defer std.Io.Dir.cwd().deleteFile(io, ".Kconfig.prj") catch {};
+
+    // 2) 加载 SDK 根 Kconfig（source 基准 = 当前 cwd = SDK 根）
+    // Luban-Lite 的 Kconfig 里每个相对 `source` 都以 **SDK 根**为基准（kconfiglib 的 $srctree 语义），
+    // 例如 `target/d13x/common/Kconfig.board` 里写 `source "bsp/artinchip/drv/gpio/Kconfig.dev"`。
+    // 因此这里必须显式把 source 基准设成 "."（= 已切换后的 cwd = SDK 根），不能用文件所在目录。
+    const kconfig = @import("kconfig.zig");
+    var kc = try kconfig.loadFrom(allocator, io, "Kconfig", ".");
+    defer kc.deinit();
+
+    const Ctx = struct {
+        fn defined(cfg: *kconfig.Config, name: []const u8) bool {
+            return cfg.find(bareName(name)) != null or cfg.find(name) != null;
+        }
+    };
+
+    // 3) 逐行判定（只认 CONFIG_X=...，`# CONFIG_X is not set` 不算打开）
+    var unknown: std.ArrayList([]const u8) = .empty;
+    var risky: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.splitScalar(u8, output_text, '\n');
+    while (it.next()) |line| {
+        const entry = parseLine(line);
+        const name = entry.name orelse continue;
+        if (!Ctx.defined(&kc, name)) {
+            try unknown.append(a, name);
+            continue;
+        }
+        if (isConfigLine(line) and isBlacklisted(name)) try risky.append(a, name);
+    }
+
+    // 4) 报告文本（与参考 print 文案一致）
+    var out: std.Io.Writer.Allocating = .init(a);
+    try out.writer.writeAll("  ");
+    if (unknown.items.len > 0) {
+        try out.writer.print(
+            "options without a definition in the target tree (auto-dropped on apply-def): {d}\n",
+            .{unknown.items.len},
+        );
+        for (unknown.items[0..@min(unknown.items.len, 8)]) |n| {
+            try out.writer.print("    - {s}\n", .{n});
+        }
+        if (unknown.items.len > 8) {
+            try out.writer.print("    ... {d} more\n", .{unknown.items.len - 8});
+        }
+    } else {
+        try out.writer.writeAll("every option is defined in the target tree\n");
+    }
+    if (risky.items.len > 0) {
+        try out.writer.print("  [warning] framework switches were not removed, please confirm manually:\n", .{});
+        for (risky.items) |n| {
+            try out.writer.print("    ! {s}\n", .{n});
+        }
+    }
+
+    return .{
+        .arena = arena,
+        .text = out.written(),
+        .unknown = unknown.items.len,
+        .risky = risky.items.len,
+    };
+}
+
+/// 参考 `RE_CONFIG = re.compile(r'^\s*CONFIG_[A-Za-z0-9_]+=')`。
+fn isConfigLine(line: []const u8) bool {
+    const t = std.mem.trimStart(u8, line, " \t");
+    if (!std.mem.startsWith(u8, t, "CONFIG_")) return false;
+    var i: usize = "CONFIG_".len;
+    while (i < t.len) : (i += 1) {
+        const c = t[i];
+        if (c == '=') return i > "CONFIG_".len;
+        if (!(std.ascii.isAlphanumeric(c) or c == '_')) return false;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------

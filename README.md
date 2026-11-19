@@ -163,6 +163,7 @@ zig-out\bin\wk.exe image fwenc --key fw.key --infile app.bin --outfile app.enc
 zig-out\bin\wk.exe image extract pack/firmware.img -o extracted
 zig-out\bin\wk.exe image burner -c pack/image_cfg.json -d pack -o .
 zig-out\bin\wk.exe release-patch -t LUBAN_LITE_V1.3.1b -o patches   # repo 工作区补丁导出
+zig-out\bin\wk.exe rtt2freertos target/configs/d13x_demo88-nor_rt-thread_helloworld_defconfig --verify
 powershell -ExecutionPolicy Bypass -File tools\build-zig-sdk.ps1
 zig-out\bin\wk.exe fs install -s payload/data -d output/rootfs -o output
 zig-out\bin\wk.exe image pbp -i bootloader.bin -o bootloader.pbp -k pnk.bin

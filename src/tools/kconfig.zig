@@ -61,6 +61,14 @@ pub const Config = struct {
     arena: std.heap.ArenaAllocator,
     items: std.ArrayList(Item) = .empty,
     index: std.StringHashMap(usize),
+    /// 已成功加载的 Kconfig 文件（诊断用：与 kconfiglib 的 `kconfig_filenames` 对应）。
+    files: std.ArrayList([]const u8) = .empty,
+    /// `source` 相对路径的解析基准（null = 以“包含该 source 的文件所在目录”为基准）。
+    ///
+    /// kconfiglib 的基准是 `$srctree`（默认进程 cwd），Luban-Lite 的 Kconfig 树正是按
+    /// SDK 根书写（例如 `kernel/freertos/Kconfig` 里 `source "kernel/freertos/Kconfig.kernel"`），
+    /// 所以校验 SDK 树时必须把基准设成 SDK 根，否则会漏掉整棵子树。
+    srctree: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator) Config {
         return .{
@@ -70,6 +78,7 @@ pub const Config = struct {
     }
 
     pub fn deinit(self: *Config) void {
+        self.files.deinit(self.index.allocator);
         self.items.deinit(self.index.allocator);
         self.index.deinit();
         self.arena.deinit();
@@ -128,24 +137,28 @@ pub const Config = struct {
         var help_indent: usize = 0;
 
         while (lines.next()) |raw_line| {
-            const line = std.mem.trimEnd(u8, raw_line, "\r");
-            const stripped = std.mem.trim(u8, line, " \t");
+            const raw = std.mem.trimEnd(u8, raw_line, "\r");
 
-            // help 块：缩进行（或空行）属于帮助文本
+            // help 块：缩进行（或空行）属于帮助文本（保留原始内容，含 `#`）
             if (pending_help) {
-                if (stripped.len == 0) {
+                const hstripped = std.mem.trim(u8, raw, " \t");
+                if (hstripped.len == 0) {
                     try cur_help.appendSlice(self.alloc(), "\n");
                     continue;
                 }
-                const indent = line.len - std.mem.trimStart(u8, line, " \t").len;
+                const indent = raw.len - std.mem.trimStart(u8, raw, " \t").len;
                 if (help_indent == 0) help_indent = indent;
                 if (indent >= help_indent) {
-                    try cur_help.appendSlice(self.alloc(), stripped);
+                    try cur_help.appendSlice(self.alloc(), hstripped);
                     try cur_help.append(self.alloc(), '\n');
                     continue;
                 }
                 pending_help = false;
             }
+
+            // 行尾注释（`source "x"   # for ...`）：只剥**引号外**的 `#`
+            const line = stripLineComment(raw);
+            const stripped = std.mem.trim(u8, line, " \t");
             if (stripped.len == 0) continue;
             if (std.mem.startsWith(u8, stripped, "#")) continue;
 
@@ -550,15 +563,27 @@ pub const Config = struct {
             error.FileNotFound => return,
             else => return err,
         };
-        const dir = std.fs.path.dirname(path) orelse ".";
+        self.files.append(self.index.allocator, try self.alloc().dupe(u8, path)) catch {};
+        const dir = self.srctree orelse (std.fs.path.dirname(path) orelse ".");
         try self.parseText(text, conds, io, dir, depth);
     }
 };
 
 /// 加载 Kconfig 树（从文件入口，自动处理 source）。
 pub fn load(allocator: std.mem.Allocator, io: std.Io, path: []const u8) anyerror!Config {
+    return loadFrom(allocator, io, path, null);
+}
+
+/// 同上，但显式指定 `source` 相对路径的基准目录（= kconfiglib 的 `$srctree`）。
+pub fn loadFrom(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    path: []const u8,
+    srctree: ?[]const u8,
+) anyerror!Config {
     var cfg = Config.init(allocator);
     errdefer cfg.deinit();
+    if (srctree) |st| cfg.srctree = try cfg.arena.allocator().dupe(u8, st);
     var conds: std.ArrayList(*const Expr) = .empty;
     defer conds.deinit(allocator);
     try cfg.loadFile(io, path, &conds, 0);
@@ -574,6 +599,19 @@ fn matchGlob(pattern: []const u8, name: []const u8) bool {
         return std.mem.startsWith(u8, name, pattern[0 .. pattern.len - 1]);
     }
     return std.mem.eql(u8, pattern, name);
+}
+
+/// 去掉引号外的行尾注释（`source "a/Kconfig"  # for X` → `source "a/Kconfig"`）。
+fn stripLineComment(s: []const u8) []const u8 {
+    var in_quote = false;
+    for (s, 0..) |c, i| {
+        if (c == '"') {
+            in_quote = !in_quote;
+        } else if (c == '#' and !in_quote) {
+            return std.mem.trimEnd(u8, s[0..i], " \t");
+        }
+    }
+    return s;
 }
 
 fn stripQuotes(s_in: []const u8) []const u8 {
@@ -869,4 +907,55 @@ test "Kconfig 输出 .config 与 cconfig.h" {
     try std.testing.expect(std.mem.find(u8, header, "#define CONFIG_AIC_CHIP_D13X 1") != null);
     try std.testing.expect(std.mem.find(u8, header, "#define CONFIG_PRJ_CHIP \"d13x\"") != null);
     try std.testing.expect(std.mem.find(u8, header, "/* #undef CONFIG_AIC_USING_I2C2 */") != null);
+}
+
+
+test "kconfig：剥掉引号外的行尾注释（source 行）" {
+    // Luban-Lite 的 Kconfig 里确实有 `source "x/Kconfig"   # for ...` 这种写法，
+    // 不剥注释会把 `# for ...` 当成路径的一部分（Windows 上直接 BadPathName）。
+    try std.testing.expectEqualStrings(
+        "source \"packages/third-party/cherryusb/Kconfig\"",
+        stripLineComment("source \"packages/third-party/cherryusb/Kconfig\"   # for CherryUSB V1.5.0"),
+    );
+    // 引号里的 `#` 不能当注释
+    try std.testing.expectEqualStrings(
+        "default \"a#b\"",
+        stripLineComment("default \"a#b\""),
+    );
+    // 整行注释
+    try std.testing.expectEqualStrings("", stripLineComment("# source \"a/Kconfig\""));
+}
+
+test "kconfig：srctree 决定 source 的相对基准" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "a");
+    try tmp.dir.createDirPath(io, "b");
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "a/Kconfig",
+        .data = "source \"b/Kconfig\"\n",
+    });
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "b/Kconfig",
+        .data = "config FOO_BAR\n    bool \"foo\"\n    default y\n",
+    });
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", arena.allocator());
+    const entry = try std.fs.path.join(arena.allocator(), &.{ root, "a/Kconfig" });
+
+    // 默认基准 = 文件所在目录 → `b/Kconfig` 解析成 a/b/Kconfig，不存在 → 加载不到
+    var cfg1 = try load(allocator, io, entry);
+    defer cfg1.deinit();
+    try std.testing.expect(cfg1.find("FOO_BAR") == null);
+
+    // srctree = 根目录 → `b/Kconfig` 命中
+    var cfg2 = try loadFrom(allocator, io, entry, root);
+    defer cfg2.deinit();
+    try std.testing.expect(cfg2.find("FOO_BAR") != null);
+    try std.testing.expectEqual(@as(usize, 2), cfg2.files.items.len);
 }

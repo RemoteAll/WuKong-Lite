@@ -23,7 +23,7 @@
 
 ```powershell
 zig build              # 构建 wk.exe
-zig build test         # 135 项单测
+zig build test         # 137 项单测
 .\zig-out\bin\wk.exe   # 查看命令
 wk image flashpack --payload-dir payload --out-dir flash
 powershell -File tools\fetch-upgcmd-deps.ps1 -SdkRoot G:\Code\C\luban-lite
@@ -37,7 +37,7 @@ wk image rsakey -r key.pem [-a aes.key | -d des.key] [-o outdir]   # encrypt_rsa
 wk panic -l panic.log [-e app.elf] [--addr2line <tool>]            # panic_parse.py
 wk sdk-update --root <SDK根目录> [--write]                          # sdk_update.py
 wk release-patch -t <tag|sha> [-p a,b] [-o dir] [-n N] [--list]    # release_patch.py（repo 工作区）
-wk rtt2freertos <rt-thread_defconfig> [-o out]                      # rtt2freertos.py
+wk rtt2freertos <rt-thread_defconfig> [-o out] [--verify]           # rtt2freertos.py
 wk upg frame --cmd 0x31 --payload '{"v":"1.0"}'                    # upgcmd 帧协议
 wk upg burn --image x.img [--no-reboot] [--partition all]            # upg 请求（载荷对拍参考客户端）
 wk upg proto-version --send --server-port 9100                       # TCP 会话（upgcmd server）
@@ -55,7 +55,7 @@ wk image burner -c pack/image_cfg.json -d pack -o .                   # 量产�
   无法验证的必须明确标注“未实现/未验证”，不得声称等价。
 - **分档验证**：`zig build test` → `zig build` → 单点实跑；不随意打包/全量同步。
 - **一键回归（改动即跑）**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\regression.ps1`
-  （构建 → 135 单测 → 54 条 CLI 用例（顶层 12 + image 30 + fs/upg 12）→ 15 个对拍脚本；
+  （构建 → 137 单测 → 54 条 CLI 用例（顶层 12 + image 30 + fs/upg 12）→ 16 个对拍脚本；
   退出码 0/1，报告落 `artifacts/regression/report-<时间戳>.txt`；阈值只能抬高）。新增功能必须同步加用例，
   **不得为了变绿而改实现或改断言**；确实无法自动化的要留 `SKIP` + 原因，禁止静默跳过。
 - **中文提交**：`type(scope): 中文主题`；用 `git commit -F <UTF-8 文件>`，不要 `-m "中文"`。
