@@ -121,3 +121,23 @@ test "定长字符串写入与读取" {
     strToFixedBytes(&buf, "0123456789");
     try std.testing.expectEqualStrings("01234567", fixedBytesToStr(&buf));
 }
+
+/// 平台换行（参考 Python 以文本模式写文件 / `print` 在 Windows 上都是 CRLF）。
+pub fn platformNewline() []const u8 {
+    return if (@import("builtin").os.tag == .windows) "\r\n" else "\n";
+}
+
+/// 把文本里的 LF 换成平台换行（**只换 `\n`**，已有 `\r\n` 会变成 `\r\r\n`，调用方须保证输入是纯 LF）。
+pub fn toPlatformNewlines(a: std.mem.Allocator, s: []const u8) ![]u8 {
+    if (@import("builtin").os.tag != .windows) return a.dupe(u8, s);
+    var out: std.Io.Writer.Allocating = .init(a);
+    errdefer out.deinit();
+    for (s) |c| {
+        if (c == '\n') {
+            try out.writer.writeAll("\r\n");
+        } else {
+            try out.writer.writeByte(c);
+        }
+    }
+    return out.toOwnedSlice();
+}

@@ -87,6 +87,12 @@ WuKong-Lite（悟空 Lite）是用 **Zig** 复刻 [Luban-Lite 2.0](https://gitee
 - **烧写包准备**：`wk image flashpack` 读取 image_cfg 与 payload 目录，校验 AIC/FIT、
   自动补 `env.bin`/`rodata.fatfs`、按分区大小检查，输出 AIC.FW + `manifest.txt` + `FLASH.md`
   + `flash-upgcmd.ps1` / `flash-aiburn.ps1`。
+- **打包流水线（全 Zig）**：`wk image preproc -c <cfg.json> -d <dir> [-k <keydir>] [--timestamp N]`
+  依次执行 `pre-process` 各段（`aicprivate` / `itb` / **`elf2itb`** / `uboot_env` / `aicimage` /
+  `concatenate` / `data_crypt`），随后 `wk image pack --config <cfg.json> --datadir <dir> -o <out.img>`
+  拼出 AIC.FW —— 与参考 `mk_image.py -p` + 主流程**逐字节等价**（仅 `info.bin` 构建时间与
+  FIT 根 `timestamp` 不同），`-timestamp` 可固定时间戳使同一输入的产物可复现。
+  一键示例：`tools/build-d12x-firmware.ps1 -SkipBuild -timestamp 1700000000`。
 - **官方文档迁移**：`docs/official/` 收录 SDK 的 AIBURN 技能（含客户端脚本）与第三方许可证，
   见 `docs/FLASHING.md`。
 - **Zig 开发支持**：`docs/ZIG_ON_LUBAN_LITE.md` 记录 Zig 目标参数

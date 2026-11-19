@@ -62,6 +62,10 @@
 | `sparse.zig` | `img2simg` / `simg2img` | Android sparse（零块 FILL、其余 RAW、尾部补齐） |
 | `cpio.zig` | `mkcpio.py`（`cpio -ov -H crc`） | newc/crc 归档、4 字节对齐、TRAILER、512 对齐 |
 | `flashpack.zig` | `mk_image.py` + 烧写前检查 | 组件校验/补齐、分区上限检查、AIC.FW、manifest/FLASH.md |
+| `preproc.zig` | `mk_image.py::firmware_component_preproc` | `pre-process` 7 类段：`aicprivate`/`itb`/**`elf2itb`**/`uboot_env`/`aicimage`/`concatenate`/`data_crypt` |
+| `partcheck.zig` | `partition_check.py` | 分区占用检查（`-v` 逐段明细 + ANSI 着色） |
+| `burner.zig` | `mk_image.py -b/--burner` | 量产整片 bin + 分区烧写表 |
+| `fwextract.zig` | `mk_image.py -i/--imgfile` | AIC.FW 解包（`wk image extract`） |
 
 ## 6. 应用与 shell
 

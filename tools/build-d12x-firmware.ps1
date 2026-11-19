@@ -21,7 +21,12 @@ param(
     [string]$App = "helloworld",
     [string]$BuildRoot = "",
     [switch]$WithZig,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    # 默认用 Zig 的 `wk image preproc` + `wk image pack` 打包（与参考 mk_image.py 逐字节等价）；
+    # 需要交叉核对时才切回厂商 Python。
+    [switch]$UseReferencePacker,
+    # FIT timestamp（0 = 取当前时间）；固定它可复现同一个 .img。
+    [int]$timestamp = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -117,12 +122,30 @@ try {
     }
 
     # ------------------------------------------------------------ 打包 AIC.FW
-    Write-Host "[5/5] 打包 AIC.FW ..."
-    Invoke-Tool "mk_image" @("tools\scripts\mk_image.py", "-v",
-        "-c", (Join-Path $imgDir "image_cfg.json"), "-d", $imgDir)
+    # 默认走**我们自己的 Zig 工具链**（`wk image preproc` + `wk image pack`），
+    # 与参考 `mk_image.py -p` + 主流程逐字节等价（仅 FIT timestamp / info 构建时间不同）。
+    # 需要交叉核对时才加 `-UseReferencePacker` 走厂商 Python。
+    if ($UseReferencePacker) {
+        Write-Host "[5/5] 打包 AIC.FW（参考 mk_image.py）..."
+        Invoke-Tool "mk_image" @("tools\scripts\mk_image.py", "-v",
+            "-c", (Join-Path $imgDir "image_cfg.json"), "-d", $imgDir)
+        $img = Get-ChildItem $imgDir -Filter "$($Chip)_$($Board)_*.img" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if (-not $img) { throw "未生成 .img（检查 image_cfg.json 的 platform/product）" }
+    } else {
+        $wk = Join-Path $Repo "zig-out\bin\wk.exe"
+        if (-not (Test-Path $wk)) { throw "找不到 $wk（先在仓库根跑 zig build）" }
+        if ($timestamp -le 0) { $timestamp = [int][double]::Parse((Get-Date -UFormat %s)) }
 
-    $img = Get-ChildItem $imgDir -Filter "$($Chip)_$($Board)_*.img" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if (-not $img) { throw "未生成 .img（检查 image_cfg.json 的 platform/product）" }
+        Write-Host "[5/5] 打包 AIC.FW（Zig：wk image preproc + wk image pack，timestamp=$timestamp）..."
+        & $wk image preproc -c (Join-Path $imgDir "image_cfg.json") -d $imgDir --timestamp $timestamp
+        if ($LASTEXITCODE -ne 0) { throw "wk image preproc 失败（exit $LASTEXITCODE）" }
+
+        $product = "$($Chip)_$($Board)_v1.0.0_zig.img"
+        $imgPath = Join-Path $imgDir $product
+        & $wk image pack --config (Join-Path $imgDir "image_cfg.json") --datadir $imgDir -o $imgPath
+        if ($LASTEXITCODE -ne 0) { throw "wk image pack 失败（exit $LASTEXITCODE）" }
+        $img = Get-Item $imgPath
+    }
 
     $dstDir = Join-Path $Repo "artifacts\firmware-$Chip"
     New-Item -ItemType Directory -Force $dstDir | Out-Null

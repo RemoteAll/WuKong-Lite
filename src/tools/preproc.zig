@@ -7,11 +7,13 @@
 //!   * `uboot_env`   → 环境变量镜像（分区前缀 + 可选冗余，复用 `pack.buildEnv`）
 //!   * `aicimage`    → AIC 启动镜像 v2（`aicboot.createImageV2`）
 //!   * `concatenate` → 顺序拼接（支持 `[files]` 与 `{files, max_size}` 两种写法）
+//!   * `elf2itb`     → ELF → ITS（`elf2aic.itsSegments`，description 固定 "Luban-lite firmware"）
+//!                     → FIT（external data + 0x800 块对齐），见 `runElf2itb`
+//!   * `data_crypt`  → 固件加密（调厂商 `firmware_security_encrypt`，与 SDK 用法一致）
 //!
 //! 未实现（遇到明确报错，不静默跳过）：
 //!   * `aicboot`     → 遗留 v1 头，Luban-Lite 1.0.6 之后不再使用
-//!   * `elf2itb`     → 需要 elf2image 一步到位；可用 `image elf2its` + `image itb` 组合替代
-//!   * `spienc` / `spienctool` / `data_crypt` → 依赖厂商预编译工具（无源码）
+//!   * `spienc` / `spienctool` → 依赖厂商预编译工具（无源码）
 const std = @import("std");
 const image_cfg = @import("image_cfg.zig");
 const privres = @import("privres.zig");
@@ -31,7 +33,7 @@ pub const Error = error{
     NoPreProcess,
 };
 
-pub const Kind = enum { aicprivate, itb, uboot_env, aicimage, concatenate, data_crypt };
+pub const Kind = enum { aicprivate, itb, elf2itb, uboot_env, aicimage, concatenate, data_crypt };
 
 pub const Step = struct {
     /// 段名（如 `aicimage`）
@@ -215,6 +217,92 @@ fn runItb(
                 .kind = .itb,
             });
         }
+    }
+}
+
+/// `elf2itb`：ELF → ITS（等价 `elf2image.elf2its`）→ ITB（`build_itb`，external data + 0x800 对齐）。
+///
+/// 与 `itb` 段唯一的区别是 **ITS 现场由 ELF 生成**（`itb` 段用的是配置里已有的 `.its` 文件）。
+/// 参考 `firmware_component_preproc_elf2itb()` 还支持 `signature` / `encryption`，
+/// 本仓库尚未实现这两项 —— 配置里一旦启用就明确报错，不静默产出未签名镜像。
+fn runElf2itb(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    datadir: []const u8,
+    items: std.json.ObjectMap,
+    version: []const u8,
+    timestamp: u32,
+    steps: *std.ArrayList(Step),
+) !void {
+    const elf2aic = @import("elf2aic.zig");
+
+    var it = items.iterator();
+    while (it.next()) |e| {
+        const itb_name = e.key_ptr.*;
+        const obj = image_cfg.asObject(e.value_ptr.*) orelse return Error.BadConfig;
+
+        if (image_cfg.getObj(obj, "signature") != null or image_cfg.getObj(obj, "encryption") != null) {
+            return Error.UnsupportedProc;
+        }
+
+        const elf_name = image_cfg.getStr(obj, "elf") orelse return Error.BadConfig;
+        const elf_path = try resolveIn(allocator, io, datadir, elf_name);
+        defer allocator.free(elf_path);
+        const elf = try readFile(allocator, io, elf_path);
+        defer allocator.free(elf);
+
+        const segs = try elf2aic.itsSegments(allocator, elf);
+        defer elf2aic.freeItsSegments(allocator, segs);
+
+        // 段数据与参考一致：写到数据目录（`seg0.bin`…）
+        for (segs, 0..) |seg, i| {
+            const seg_name = try std.fmt.allocPrint(allocator, "seg{d}.bin", .{i});
+            defer allocator.free(seg_name);
+            try writeOut(io, datadir, seg_name, seg.data);
+        }
+
+        // ITS 名：`xxx.itb` → `xxx.its`
+        const its_name = if (std.mem.endsWith(u8, itb_name, ".itb"))
+            try std.fmt.allocPrint(allocator, "{s}.its", .{itb_name[0 .. itb_name.len - 4]})
+        else
+            try std.fmt.allocPrint(allocator, "{s}.its", .{itb_name});
+        defer allocator.free(its_name);
+
+        var algos: std.ArrayList([]const u8) = .empty;
+        defer algos.deinit(allocator);
+        if (image_cfg.getArray(obj, "hash")) |arr| {
+            for (arr.items) |v| {
+                const algo = switch (v) {
+                    .string => |sv| sv,
+                    else => return Error.BadConfig,
+                };
+                try algos.append(allocator, algo);
+            }
+        }
+
+        var its_text: std.Io.Writer.Allocating = .init(allocator);
+        defer its_text.deinit();
+        try elf2aic.generateIts(&its_text.writer, segs, version, "Luban-lite firmware", algos.items);
+        // 参考 `_generate_its()` 以文本模式写文件 → Windows 上 ITS 是 CRLF；
+        // ITB 本身不受影响（换行在 DTS 解析阶段就被吃掉），但对拍要字节一致。
+        const its_bytes = try utils.toPlatformNewlines(allocator, its_text.written());
+        defer allocator.free(its_bytes);
+        try writeOut(io, datadir, its_name, its_bytes);
+
+        // ITS → ITB（与 `itb` 段同样的 external data + 0x800 对齐）
+        const its_path = try resolveIn(allocator, io, datadir, its_name);
+        defer allocator.free(its_path);
+        var parsed = try its.parse(allocator, io, its_path);
+        defer parsed.deinit();
+        const blob = try parsed.buildFdtExternal(allocator, timestamp, 0x800);
+        defer allocator.free(blob);
+        try writeOut(io, datadir, itb_name, blob);
+        try steps.append(allocator, .{
+            .proc = "elf2itb",
+            .name = try allocator.dupe(u8, itb_name),
+            .size = blob.len,
+            .kind = .elf2itb,
+        });
     }
 }
 
@@ -412,6 +500,14 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, opt: Options) ![]Step {
             try runAicprivate(allocator, io, opt.datadir, items, &steps);
         } else if (std.mem.eql(u8, proc, "itb")) {
             try runItb(allocator, io, opt.datadir, items, opt.timestamp, &steps);
+        } else if (std.mem.eql(u8, proc, "elf2itb")) {
+            // 参考：`cfg.get("image", {}).get("info", {}).get("version", "1.0.0")` —— 缺整段也不报错
+            const version = blk: {
+                const image_obj = image_cfg.getObj(root_obj, "image") orelse break :blk "1.0.0";
+                const info_obj = image_cfg.getObj(image_obj, "info") orelse break :blk "1.0.0";
+                break :blk image_cfg.getStr(info_obj, "version") orelse "1.0.0";
+            };
+            try runElf2itb(allocator, io, opt.datadir, items, version, opt.timestamp, &steps);
         } else if (std.mem.eql(u8, proc, "uboot_env")) {
             try runUbootEnv(allocator, io, parsed.root().*, opt.datadir, items, &steps);
         } else if (std.mem.eql(u8, proc, "aicimage")) {
@@ -420,7 +516,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, opt: Options) ![]Step {
             try runConcatenate(allocator, io, opt.datadir, items, &steps);
         } else if (std.mem.eql(u8, proc, "data_crypt")) {
             try runDataCrypt(allocator, io, opt.datadir, keydir, opt.tool_dir, items, &steps);
-        } else if (std.mem.eql(u8, proc, "aicboot") or std.mem.eql(u8, proc, "elf2itb")) {
+        } else if (std.mem.eql(u8, proc, "aicboot")) {
             return Error.UnsupportedProc;
         } else if (std.mem.eql(u8, proc, "spienc") or std.mem.eql(u8, proc, "spienctool")) {
             // 这两个段在 20 个官方 image_cfg.json 里出现 0 次，且同样只有预编译 exe；
@@ -481,6 +577,57 @@ test "preproc：concatenate 按顺序拼接，max_size 超限报错" {
     });
     try std.testing.expectError(Error.ComponentTooLarge, run(allocator, io, .{
         .cfg_path = testPath(&b5, "cfg2.json"),
+        .datadir = dir,
+    }));
+}
+
+test "preproc: elf2itb 段拒绝 signature / encryption（不静默产出未签名镜像）" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const dir = ".zig-cache/preproc-test";
+
+    std.Io.Dir.cwd().createDirPath(io, dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+
+    var b1: [160]u8 = undefined;
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = testPath(&b1, "cfg_sig.json"),
+        .data = "{\"pre-process\":{\"elf2itb\":{\"os.itb\":{\"elf\":\"x.elf\"," ++
+            "\"hash\":[\"crc32\"],\"signature\":{\"algo\":\"sha256\"}}}}}",
+    });
+    try std.testing.expectError(Error.UnsupportedProc, run(allocator, io, .{
+        .cfg_path = testPath(&b1, "cfg_sig.json"),
+        .datadir = dir,
+    }));
+
+    var b2: [160]u8 = undefined;
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = testPath(&b2, "cfg_enc.json"),
+        .data = "{\"pre-process\":{\"elf2itb\":{\"os.itb\":{\"elf\":\"x.elf\"," ++
+            "\"encryption\":{\"algo\":\"aes-128-cbc\"}}}}}",
+    });
+    try std.testing.expectError(Error.UnsupportedProc, run(allocator, io, .{
+        .cfg_path = testPath(&b2, "cfg_enc.json"),
+        .datadir = dir,
+    }));
+}
+
+test "preproc: elf2itb 段缺 ELF 时明确报 MissingFile" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const dir = ".zig-cache/preproc-test";
+
+    std.Io.Dir.cwd().createDirPath(io, dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+
+    var b: [160]u8 = undefined;
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = testPath(&b, "cfg_missing.json"),
+        .data = "{\"pre-process\":{\"elf2itb\":{\"os.itb\":{\"elf\":\"nope.elf\"}," ++
+            "\"hash\":[\"crc32\"]}}}",
+    });
+    try std.testing.expectError(Error.MissingFile, run(allocator, io, .{
+        .cfg_path = testPath(&b, "cfg_missing.json"),
         .datadir = dir,
     }));
 }

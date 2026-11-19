@@ -7,6 +7,8 @@
 //!   * 其余文件按文件大小计算，`.aic` 是打包产物本身，同样按文件大小；
 //!   * 默认只告警，`--strict` 时超过 100% 返回非零。
 const std = @import("std");
+
+const utils = @import("../bsp/common/utils.zig");
 const image_cfg = @import("image_cfg.zig");
 
 pub const Error = error{ BadConfig, PartitionOverflow };
@@ -30,25 +32,9 @@ pub const Result = struct {
     debug: []u8 = &.{},
 };
 
-/// 参考用 Python `print`，在 Windows 上每行以 CRLF 结束。
-fn platformNewline() []const u8 {
-    return if (@import("builtin").os.tag == .windows) "\r\n" else "\n";
-}
-
-/// 把文本里的 LF 换成平台换行（参考 `print` 的文本模式行为）。
-fn toPlatformNewlines(a: std.mem.Allocator, s: []const u8) ![]u8 {
-    if (@import("builtin").os.tag != .windows) return a.dupe(u8, s);
-    var out: std.Io.Writer.Allocating = .init(a);
-    errdefer out.deinit();
-    for (s) |c| {
-        if (c == '\n') {
-            try out.writer.writeAll("\r\n");
-        } else {
-            try out.writer.writeByte(c);
-        }
-    }
-    return out.toOwnedSlice();
-}
+/// 参考用 Python `print`，在 Windows 上每行以 CRLF 结束（实现下沉到 `utils`）。
+const platformNewline = utils.platformNewline;
+const toPlatformNewlines = utils.toPlatformNewlines;
 
 /// 没有可检查内容时的空结果（保留 `-v` 诊断）。
 fn emptyResult(a: std.mem.Allocator, dbg: *Debug) !Result {
