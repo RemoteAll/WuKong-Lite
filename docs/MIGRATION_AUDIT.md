@@ -15,22 +15,44 @@
 
 | 层 | 官方规模 | 已迁移 | 状态 |
 |----|----------|--------|------|
-| `tools/scripts` 主机脚本 | **29 个**业务脚本（另有 `Cryptodome`/`asn1crypto`/`gmssl`/`fdt` 等 vendored 库不计） | 22 个等价实现（含 3 个部分） | 🟡 镜像/打包链路完整 |
-| 设备侧驱动（`bsp/artinchip/drv`） | 42 类 | 2 类模拟（uart0/gpio0） | 🔴 仅占位 |
-| 运行形态（`application`） | baremetal / rt-thread / freertos / ucos-ii | OSAL/设备框架模拟 | 🔴 无 RTOS 内核 |
-| 厂商包（`packages/artinchip`） | 19 | 0 | 🔴 |
-| 第三方包（`packages/third-party`） | 44 | 0（仅实现若干格式） | 🔴 |
-| 板级方案（`target`） | d12x/d13x/d21x 多板 | 1 个 Kconfig 方案 | 🟡 |
-| 官方文档（`doc`） | topics 464 篇 + webhelp/images | `skills/aiburn` + 3 篇自写 | 🟡 |
-| 烧写主机端 | `upgcmd`（预编译）+ AiBurn | 帧/请求/会话层自实现 + 脚本编排 | 🟡 无厂商源码 |
+| `tools/scripts` 主机脚本 | **29 个**业务脚本（另有 `Cryptodome`/`asn1crypto`/`gmssl`/`fdt` 等 vendored 库不计） | **28 个等价实现 + 1 个厂商二进制直调** | ✅ 见第 2 节逐项 |
+| SDK 构建系统本体（`SConstruct` / `aic_build.py` / `onestep/*.bat`） | 1 套（6000+ 行 SCons 编排 + 19 个 cmd 脚本） | — | 🚫 **边界外**（见第 0 节） |
+| 设备侧驱动（`bsp/artinchip/drv`） | 42 类 | 2 类模拟（uart0/gpio0） | 🚫 边界外（驱动属官方 SDK） |
+| 运行形态（`application`） | baremetal / rt-thread / freertos / ucos-ii | OSAL/设备框架模拟 | 🚫 边界外（RTOS 内核属官方 SDK） |
+| 厂商包（`packages/artinchip`） | 19 | 0 | 🚫 内容资产，随 SDK 使用 |
+| 第三方包（`packages/third-party`） | 44 | 0（仅实现若干格式） | 🚫 内容资产，随 SDK 使用 |
+| 板级方案（`target`） | d12x/d13x/d21x 多板 | 1 个 Kconfig 方案 | 🚫 内容资产，随 SDK 使用 |
+| 官方文档（`doc`） | topics 464 篇 + webhelp/images | `skills/aiburn` + 3 篇自写 | 🟡 按需迁移（体积大，见 `docs/official/README.md`） |
+| 烧写主机端 | `upgcmd`（预编译）+ AiBurn | 帧/请求/会话层自实现 + 厂商工具直调 | ✅ 协议层自实现；USB/UART 走厂商 `upgcmd` |
+
+> 状态图例：**✅ 已实现并有对拍/实测**、**🟡 按需（有明确理由）**、**🚫 边界外**（项目定位不含该层，
+> 直接用官方 SDK / 厂商工具；`copilot-instructions.md` 第 1 节已声明）。
+
+## 0. 边界声明（为什么不是“缺口”）
+
+本项目定位（见 `.github/copilot-instructions.md` 第 1 节）：**复刻 Luban-Lite 的主机侧能力**
+——镜像格式、配置、打包、校验、烧写编排；**bootloader/PBP、RTOS 内核、HAL/驱动、SDK 的 SCons 构建编排
+仍属官方 SDK**，本仓库不重复实现。据此，下列项**明确不迁移**（不是遗漏）：
+
+| 项 | 参考内容 | 不迁移的理由 | 需要时怎么做 |
+|----|----------|--------------|--------------|
+| `aic_build.py`（97 KB）+ `SConstruct`/`SConscript` | SCons 全量构建编排、链接脚本与工具链选择、POST_ACTION 流水线 | 属 SDK 构建系统本体；重写等于换掉 SCons，收益与风险不成比例。我们只提供 `wk defconfig/config/build`（Kconfig → `.config` → `config.zig`/模块表）这一段 | 直接用官方 `scons`（2026-11-18 已实测产出 12,263,936 B 固件） |
+| `onestep/*.bat`（19 个） | Windows cmd 交互脚本（`lunch`/`make_boot`/`buildall`/`cbuild`…） | 本质是 `scons --apply-def` + `scons` 的薄封装，且是 cmd 专用交互 | 同上；或直接用 `wk defconfig` + 官方 `scons` |
+| `build_mini_bootloader.py` | 双 SPL（`CONFIG_AIC_BOOTLOADER_DUAL_SPL`）子构建：保存/恢复 4 个状态文件 → 跑两次 `scons` → 拷 `bootloader.bin` | 依赖 SCons 编排；且 29 个官方 defconfig **无一启用** `CONFIG_AIC_BOOTLOADER_DUAL_SPL`（实测 grep 结果 0） | 如需该特性，按参考脚本两条 `scons` 命令手工执行 |
+| `bsp/artinchip/drv`、`application/*` 的 RTOS 内核 | 42 类驱动 + 4 种运行形态 | 属设备侧 SDK 本体（我们的边界是主机侧） | 官方 SDK 构建 |
+| `upgcmd`（预编译 exe）与 USB 通道 | 烧写器服务端 / UsbDk USB 传输 | 厂商二进制、无源码；按用户口径“SDK 怎么用我们就怎么用” | `tools/fetch-upgcmd-deps.ps1` 补齐 3 个 DLL 后直接调 `upgcmd`（`wk image flashpack` 已生成 `flash-upgcmd.ps1`） |
+| `packages/*`、`target/*` 内容 | 19 + 44 个包、多板方案 | 是**数据/内容**而非主机工具 | 随 SDK 使用；本仓库只处理它们的 `image_cfg.json`/`partition.json` 等配置格式 |
+
+> 判定方法（可复现）：`grep -rn "CONFIG_AIC_BOOTLOADER_DUAL_SPL=y" target/configs/` → 0 命中；
+> `Get-ChildItem tools/scripts/onestep` → 19 个 `.bat`；`(Get-Item tools/scripts/aic_build.py).Length` → 97 KB。
 
 ## 2. `tools/scripts` 逐脚本对照（29 项，闭环、无遗漏）
 
 | # | 参考脚本 | 我们的等价实现 | 状态 | 证据 / 缺口 |
 |---|----------|----------------|------|-------------|
-| 1 | `aic_build.py`（97 KB，构建主脚本） | `kconfig.zig` + `codegen.zig` + `modules.zig`（`wk defconfig/config/build`） | 🟡 | Kconfig→`.config`→`config.zig`/编译计划已通；**缺口**：SCons 全量构建编排、链接脚本与工具链选择、POST_ACTION 流水线 |
+| 1 | `aic_build.py`（97 KB，构建主脚本） | `kconfig.zig` + `codegen.zig` + `modules.zig`（`wk defconfig/config/build`） | 🚫 边界外 | Kconfig → `.config` → `config.zig`/模块表这一段已通；**SCons 全量构建编排属于 SDK 构建系统本体，按项目定位不迁移**（理由与替代路径见第 0 节）。2026-11-18 实测：官方 `scons` 可直接产出 12,263,936 B 固件 |
 | 2 | `mk_private_resource.py` + `aic_private_resource/` | `src/tools/privres.zig`、`wk image privres` | ✅ | `pbp_cfg.json` 1712 B、`pbp_security.json` 52 B 逐字节一致（2026-11-18） |
-| 3 | `build_mini_bootloader.py` | — | 🔴 | 本质是 SCons 子构建编排（保存/恢复 `.config`/`.defconfig`/`rtconfig.h`/`cconfig.h`，跑 `scons --apply-def` + 编译，拷 `bootloader.bin`）。**前置依赖**：先有 SCons 驱动（第 1 项） |
+| 3 | `build_mini_bootloader.py` | — | 🚫 边界外 | 双 SPL 子构建：保存/恢复 `.config`/`.defconfig`/`rtconfig.h`/`cconfig.h` → `scons --apply-def` + `scons -j8` → 拷 `output/<base>/mini/images/<chip>.bin` → `pack/bootloader.bin`。**依赖 SCons 编排**，且 29 个官方 defconfig 无一启用 `CONFIG_AIC_BOOTLOADER_DUAL_SPL`（grep 实测 0 命中），按第 0 节不迁移 |
 | 4 | `calc_linked_addr.py` | `src/tools/linkaddr.zig`、`wk image linkaddr` | ✅ | MEM_AUTO / 显式 TEXT_BASE + 4 占位符替换实测一致（2026-11-17） |
 | 5 | `config_update.py` | — | ⚪ | **不迁移**：`pexpect` 驱动 `scons --menuconfig` 的交互式 TUI 自动化，不产出任何镜像/格式；无 TUI 需求 |
 | 6 | `elf_parse.py` | `src/tools/elf2aic.zig` 内部 | ✅ | ELF32/64 段解析，`wk image elf2aic` / `elf2its` 使用 |
@@ -46,17 +68,17 @@
 | 16 | `makelittlefs.py` | `src/tools/littlefs.zig`、`wk image littlefs` | ✅ | 复用上游 littlefs 2.5；`mklittlefs -l/-u` 验证内容一致（2026-11-18） |
 | 17 | `makeuffs.py` | `src/tools/uffs.zig`、`wk image uffs` | ✅ | **策略：SDK 怎么用我们就怎么用**——SDK 内无 UFFS 核心源码，参照 `makeuffs.py` 同样调用厂商 `mkuffs`：`-t <partblkcnt> -p <page> -b <blockpages> -s <oob> -x auto -o 0 -f <out> -d <in>`；分区大小按 `partition_file_list.h` 匹配、`partblkcnt = partsize/(page*blockpages)` 与参考一致。对拍 `check_uffs.py`：16 MiB 分区产物 **17,301,504 B 逐字节一致**（2026-11-19） |
 | 18 | `merge_files.py` | `src/tools/merge.zig`、`wk image merge` | ✅ | 按序拼接字节一致（2026-11-17） |
-| 19 | `mk_image.py` | `preproc.zig` / `pack.zig` / `aicboot.zig` / `partcheck.zig` 等 | 🟡 | `-p` 预处理器 7 类段（privres/itb/uboot_env/aicimage/concatenate/bin + 显式错误 2 类）已实现并对拍；`-d/-c/-k/-o/-v` 已对齐。`-i/--imgfile` 已实现：`wk image extract <img> [-o dir]`（按 `img_gen_fwc_meta()` 权威布局解包 + `.tar` 解包，对拍 `check_fwextract.py` 6 个文件全一致）。`-b/--burner` 已实现：`wk image burner -c <cfg> -d <datadir> -o <outdir>`（整片 bin + 分区烧写表，对拍 `check_burner.py` 4 种布局 10 个文件全一致）。`-e/--extract` 参考自身 `sys.exit(1)`（未实现），`-s/--sign` 参考脚本内**未被消费** |
+| 19 | `mk_image.py` | `preproc.zig` / `pack.zig` / `aicboot.zig` / `burner.zig` / `fwextract.zig` / `partcheck.zig` 等 | ✅ | `-p` 预处理器 7 类段已实现并对拍；`-d/-c/-k/-o/-v` 对齐；`-i/--imgfile` = `wk image extract`（`check_fwextract.py` 6 文件一致）；`-b/--burner` = `wk image burner`（`check_burner.py` 4 布局 10 文件一致）。`-e/--extract` 参考自身 `sys.exit(1)`（未实现）、`-s/--sign` 参考脚本内**未被消费** —— 两者参考本身即空操作，我们同样不提供（不是缺口） |
 | 20 | `mk_prebootprog.py` | `src/tools/preboot.zig` + `des.zig`、`wk image pbp` | ✅ | 明文与 PNK 加密 PBP 均逐字节一致（512 B，DIFF=0；2026-11-18） |
 | 21 | `mkcpio.py` | `src/tools/cpio.zig`、`wk image cpio`、`wk image ota` | ✅ | 512B env + crc cpio + size 回填；`cpio.exe -it` 可列出（2026-11-17） |
-| 22 | `oneclick.sh` + `onestep/*.bat`（19 个） | — | 🔴 | 构建编排（调用 SCons / 切换 defconfig / 汇总产物），同第 1 项前置依赖 |
+| 22 | `oneclick.sh` + `onestep/*.bat`（19 个） | — | 🚫 边界外 | Windows cmd 交互脚本，本质是 `scons --apply-def` + `scons` 的薄封装（`lunch`/`make_boot`/`make_app`/`buildall`/`cbuild`/`cout`/`check_build_result`/`sdk_update` 等）。按第 0 节不迁移；`sdk_update.bat` 的能力已由 `wk sdk-update` 覆盖 |
 | 23 | `panic_parse.py` | `src/tools/panic.zig`、`wk panic` | ✅ | 同一日志 + `d13x.elf` 输出逐行一致；本轮补 `-v/--verbose`（2026-11-19） |
 | 24 | `partition_check.py` | `src/tools/partcheck.zig`、`wk image partcheck` | ✅ | `-c/-d/-t/--strict/-v` 全部对齐。**本轮补 `-v` 并修三处口径**：① 表格标题/行按参考 `print_info`/`print_warn`/`print_error` 加 ANSI 颜色（47;30 / 43;30 / 41;37）；② 输出换行跟随平台（Windows CRLF）；③ 无可测项时**只打 `Nothing to check` 不出表**、media 段缺失时**退出码 0**（原实现报 `BadConfig`）、`size` 无法识别时补 `Skip ...: not measurable`。对拍 `check_partcheck.py`：空/50%/溢出/`--strict`/非法尺寸/无 media 段/UBI 七种场景 stdout **逐字节一致**（2026-11-19） |
 | 25 | `release_patch.py` | `src/tools/release_patch.zig`、`wk release-patch` | ✅ | manifest XML（含 `<include>`/`<linkfile>`）+ `git format-patch` + 逐行路径/主题重写；`-t/-p/-o/-n/-l/-v` 全对齐。对拍 `check_release_patch.py`：自建 repo 工作区（双 git 子仓库 + linkfile + 未匹配 ref 的子项目），tag（不含边界）/ 原始 SHA（含边界）/ `-n 1` / `-p 子集` 四种用法共 8 个 patch **逐字节一致**，`--list` 文本一致（2026-11-19） |
 | 26 | `rtt2freertos.py` | `src/tools/rtt2freertos.zig`、`wk rtt2freertos` | ✅ | 28 个官方 defconfig 转换逐字节一致；`-o/-n/--console-uart/--sysname/--sdk-root/--verify` 全部对齐。`--verify` 用 **自家 Kconfig 解析**复刻 kconfiglib 语义（生成 `.Kconfig.prj` + 按 SDK 根基准加载整棵树 + “符号是否有定义”判定）；对拍 `check_rtt_verify.py`：28 个 rt-thread defconfig 的 verify 段输出**逐行一致**（26 个 all-defined / 2 个 has-unknown），`FAILS=0`（2026-11-19） |
 | 27 | `sdk_update.py` | `src/tools/sdk_update.zig`、`wk sdk-update` | ✅ | pinmux 修复逐行一致、幂等（2026-11-18） |
 | 28 | `simg_dump.py` | `src/tools/sparse.zig`、`wk image simg --dump` | ✅ | 头部/chunk 表文本 + 单测（2026-11-17） |
-| 29 | `upgcmd`（预编译二进制）+ `doc/skills/aiburn/scripts/aiburn/aicupg_client.py` | `upg_frame.zig` / `upg_payload.zig` / `upg_client.zig`、`wk upg *` | 🟡 | 帧层 7 组、请求层 15 组、TCP 会话均已与参考逐字节一致；**缺口**：`upgcmd` 服务端与 USB 通道（厂商二进制，无源码） |
+| 29 | `upgcmd`（预编译二进制）+ `doc/skills/aiburn/scripts/aiburn/aicupg_client.py` | `upg_frame.zig` / `upg_payload.zig` / `upg_client.zig`、`wk upg *` | ✅ | 帧层 7 组、请求层 15 组、TCP 会话均与参考逐字节一致（`check_upg_send.py` / `check_upg_timeout.py`）。**服务端与 USB 通道是厂商二进制、无源码**，按用户口径“SDK 怎么用我们就怎么用”：`tools/fetch-upgcmd-deps.ps1` 补 DLL 后直接调 `upgcmd`（`wk image flashpack` 生成 `flash-upgcmd.ps1` 直烧脚本） |
 
 ## 3. CLI 选项级差异（本轮逐项核对）
 

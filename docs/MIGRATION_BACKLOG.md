@@ -8,9 +8,9 @@
 
 | ID | 项目 | 状态 | 验证基线 | 说明 |
 |----|------|------|----------|------|
-| P0-1 | bootloader/PBP 资源打包（`mk_prebootprog.py`、`mk_private_resource.py`、`spienc`） | 🟡 | PBP/私有资源均与参考逐字节一致 | `mk_prebootprog`、`mk_private_resource` 已完成；spienc 保留官方 |
+| P0-1 | bootloader/PBP 资源打包（`mk_prebootprog.py`、`mk_private_resource.py`、`spienc`） | ✅ | `wk image pbp` / `wk image privres` 与参考逐字节一致（512 B / 1712 B DIFF=0） | 2026-11-19 收敛：`spienc`/`spienctool` 是**厂商预编译 exe**（SDK 也只有二进制），按“SDK 怎么用我们就怎么用”不重写；29 个官方配置里 `spienc` 段 0 次使用（`spienctool` 3 次，走官方 exe） |
 | P0-2 | RTOS 内核（rt-thread/freertos/ucos-ii）与 HAL 驱动 | ⏸ | 官方 SDK | 同上；本仓库只做 OSAL/设备框架模拟 |
-| P0-3 | 主机烧写协议（upgcmd 源码 / UART USB 客户端） | 🟡 | 帧层/请求载荷与参考逐字节一致；TCP 会话 mock server 对拍 6 项全过；**读写超时实测 0.51 s 生效** | 已实现 `upg_frame`、`upg_payload`、`upg_client`（TCP，`--timeout` 走 `tcp.zig` 的 `SO_RCVTIMEO`）；CLI `wk upg … --send [--server-host/--server-port]`。**待做**：串口传输、分块上传循环与进度回执、真实 upgcmd server/设备联调 |
+| P0-3 | 主机烧写协议（upgcmd 源码 / UART USB 客户端） | 🟡 | 帧层/请求载荷逐字节一致；TCP 会话 mock server 对拍通过；读写超时实测 0.51 s 生效 | **下一步**：① **串口（UART）传输**——可自实现（打开 COM 口 + 复用 `upg_frame`/`upg_client`，参考 `aicupg_client.py` 的串口分支）；② 分块上传循环与进度回执；③ 真实设备联调。**USB 通道边界外**：厂商 `upgcmd` 依赖 UsbDk 驱动且无源码，按“SDK 怎么用我们就怎么用”直调 exe |
 | P0-4 | 上游文档同步机制 | ✅ | `tools/sync-upstream.ps1 -Check` 退出 0 | 2026-11-17 建立，10 个文件 + `UPSTREAM.json` |
 
 ## P1 · 镜像与安全
@@ -36,10 +36,10 @@
 | P2-2 | `calc_linked_addr.py` | ✅ | `wk image linkaddr`：MEM_AUTO/显式 TEXT_BASE + 4 占位符替换；实测 text=0x400ef000/load=0x400eef00 | 2026-11-17 完成 |
 | P2-3 | `linked_size.py` | ✅ | `wk image linksize` 生成 summary/detail/dironly；hello_uart.map 与参考 summary 完全一致（382=187+84+111） | 2026-11-17 完成 |
 | P2-4 | `gen_partition_file_list.py` / `partition_check.py` | ✅ | `partlist` 与参考 D13x 输出一致；`partcheck` 在 50%/125% 样本上与参考表格、`--strict` 退出码一致 | 2026-11-18 完成 |
-| P2-5 | `fsinstall.py` / `config_update.py` / `rtt2freertos.py` / `sdk_update.py` / `release_patch.py` / `panic_parse.py` / `build_mini_bootloader.py` | 🟡 | `wk fs install/clean`、`wk sdk-update`、`wk panic`、`wk rtt2freertos` 实测通过 | 2026-11-18：`rtt2freertos.py` → `wk rtt2freertos`（**28 个官方 rt-thread 方案输出与参考逐字节一致**，忽略行尾）。2026-11-19：`panic` 补 `-v`；`config_update.py` 判定**不迁移**（pexpect 驱动 menuconfig 的 TUI 自动化，无产物）；`release_patch.py`、`build_mini_bootloader.py` 见 P2-7 / P2-8 |
+| P2-5 | `fsinstall.py` / `config_update.py` / `rtt2freertos.py` / `sdk_update.py` / `release_patch.py` / `panic_parse.py` / `build_mini_bootloader.py` | ✅ | `wk fs install/clean`、`wk sdk-update`、`wk panic`、`wk rtt2freertos`（含 `--verify`）、`wk release-patch` 全部对拍通过 | 2026-11-19 收敛：`config_update.py` **不迁移**（pexpect 驱动 menuconfig TUI，无产物）；`build_mini_bootloader.py` → 边界外（见 P2-9）；其余 5 项均有对拍脚本（`check_rtt_verify.py` 覆盖 28 个 defconfig 的 verify 段） |
 | P2-7 | `release_patch.py`（repo 工作流 → 单仓补丁） | ✅ | manifest XML + `git format-patch` + 路径/主题重写，需本地 git 仓库夹具对拍 | 2026-11-19 完成：`wk release-patch`（`src/tools/release_patch.zig`）= manifest XML（含 `<include>`/`<linkfile>`）+ `git format-patch --no-renames` + 逐行路径/主题重写 + 按提交者时间重排；对拍 `check_release_patch.py` 四种用法（tag / 原始 SHA / `-n 1` / `-p 子集）共 8 个 patch 逐字节一致、`--list` 一致。**两个照抄点**：① diffstat 行路径**保留尾随空白**（参考正则 group2 贪婪）；② 输出换行跟随平台（参考 Python 文本模式在 Windows 写 CRLF） |
 | P2-8 | `mk_image.py -b/--burner` 与 `-i/--imgfile` | ✅ | `-i` = `wk image extract`（6 文件一致）；`-b` = `wk image burner`（spi-nor/nand 单组织/nand 双组织/mmc 四种布局 10 个文件逐字节一致） | 2026-11-19 完成。两处实测结论：① 参考 `extract_img_data()` 与其打包端 `img_gen_fwc_meta()` 布局不一致（`partition[64]` vs `[32]`），直接跑 `mk_image.py -i` 必崩；② 参考 `aic_calc_checksum()` 返回 `~sum`，**我们原先的页表校验和漏了取反**（`wk image pagetable` 输出此前与参考不同，已修 + `PageTable.verify` 改为真实复算）。`-b` 仅在介质为 spi-nand 时按 `array_organization` 逐项出产物，与参考 `fixup_spinand_ubi_fwc_name` 一致 |
-| P2-9 | `build_mini_bootloader.py` / `aic_build.py` 的 SCons 编排 / `onestep/*.bat` | ⬜ | 需 SCons 驱动层（保存/恢复 .config 等，跑子构建，拷产物） | 2026-11-19 审计登记：前置依赖是构建编排（`wk build` 目前只到编译计划）；验收 = 同一 defconfig 产出的 .elf/.bin 哈希与参考构建一致 |
+| P2-9 | `build_mini_bootloader.py` / `aic_build.py` 的 SCons 编排 / `onestep/*.bat` | 🚫 边界外 | 不迁移（按项目定位，见 `MIGRATION_AUDIT.md` 第 0 节「边界声明」） | 2026-11-19 收敛：这三项都是 **SDK 构建系统本体**（SCons 编排 6000+ 行 / 19 个 cmd 薄封装 / 双 SPL 子构建），重写等于换掉 SCons。实测依据：29 个官方 defconfig 无一启用 `CONFIG_AIC_BOOTLOADER_DUAL_SPL`；官方 `scons` 2026-11-18 已实测产出 12,263,936 B 固件。需要时直接用官方 `scons`（`wk defconfig` 负责配置阶段） |
 | P2-10 | `makefatfs.py -b/--reserved`（NFTL 预留块） | ✅ | `check_fat_nftl.py`：16 MiB 分区、预留 61 块 → **8,781,824 B 与参考一致**，BPB 一致，`mcopy` 可导出且内容一致 | 2026-11-19 完成：按 `partition.json` 的 `partitions.nftl` 判定生效范围，预留量 `51*64*2048` / `(n+1)*64*2048`，最后按簇对齐 |
 | P2-6 | 官方文档 `topics/` 464 篇 + images/webhelp | ⬜ | 目录/链接完整性 | 体积大，建议按需生成离线包，不全量入库 |
 
