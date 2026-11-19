@@ -23,6 +23,7 @@
 #   powershell -File tools\bootstrap.ps1 -TcPackage Xuantie-900-gcc-elf-newlib-mingw-V2.6.1-20220906-trim.tar.gz
 param(
     [string]$SdkRoot = "G:\Code\C\luban-lite",
+    [string]$SdkUrl = "https://gitee.com/artinchip/luban-lite.git",
     [string]$BuildRoot = "",
     [string]$TcPackage = "",
     [switch]$Check,
@@ -90,8 +91,16 @@ if (Test-Path (Join-Path $SdkRoot "SConstruct")) {
     }
 } else {
     Bad "SDK not found at $SdkRoot"
-    Say "        git clone https://github.com/artinchip/luban-lite.git $SdkRoot"
-    $problems += "clone luban-lite SDK"
+    Say "        will clone from: $SdkUrl"
+    if ($Check) {
+        $problems += "clone luban-lite SDK from $SdkUrl"
+    } else {
+        Say "        cloning (shallow, about 2.2 GB) ..."
+        New-Item -ItemType Directory -Force (Split-Path $SdkRoot -Parent) | Out-Null
+        & git clone --depth 1 --branch master $SdkUrl $SdkRoot
+        if ($LASTEXITCODE -ne 0) { throw "git clone failed: $SdkUrl" }
+        Ok "cloned"
+    }
 }
 
 # ---------------------------------------------------------------- 3. build workspace
